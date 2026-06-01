@@ -97,20 +97,28 @@ class SchedulingEnv(gym.Env):
             model = self.models[self._model_index(action)]
             batch_id = self.dataset.batch_for(plan_prod_key, oper_id)
             if batch_id and self.dataset.is_available(plan_prod_key, oper_id, model):
-                self._conversions.append(
-                    ConversionRecord(
-                        rule_timekey=self.dataset.rule_timekey,
-                        from_batch="",
-                        from_plan_prod_key=plan_prod_key,
-                        from_oper_id=oper_id,
-                        eqp_model_cd=model,
-                        to_batch_id=batch_id,
-                        to_plan_prod_key=plan_prod_key,
-                        to_oper_id=oper_id,
-                        start_conv_time=self.dataset.rule_timekey,
-                        eqp_qty=1,
+                sim = SchedulingSimulator(self.dataset)
+                state = sim.apply_conversions(list(self._conversions))
+                donor = sim.find_donor_batch(state, model, batch_id)
+                if donor and state.qty_on_batch(model, donor) > 0:
+                    from_bo = next(
+                        (b for b in self.dataset.batch_opers if b.batch_id == donor),
+                        None,
                     )
-                )
+                    self._conversions.append(
+                        ConversionRecord(
+                            rule_timekey=self.dataset.rule_timekey,
+                            from_batch=donor,
+                            from_plan_prod_key=from_bo.plan_prod_key if from_bo else plan_prod_key,
+                            from_oper_id=from_bo.oper_id if from_bo else oper_id,
+                            eqp_model_cd=model,
+                            to_batch_id=batch_id,
+                            to_plan_prod_key=plan_prod_key,
+                            to_oper_id=oper_id,
+                            start_conv_time=self.dataset.rule_timekey,
+                            eqp_qty=1,
+                        )
+                    )
             self._oper_idx += 1
 
         sim = SchedulingSimulator(self.dataset)

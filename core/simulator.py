@@ -19,14 +19,20 @@ class AllocationState:
     def total_for_model(self, model: str) -> int:
         return sum(self.allocation.get(model, {}).values())
 
-    def move(self, model: str, from_batch: str, to_batch: str, qty: int) -> None:
+    def move(self, model: str, from_batch: str, to_batch: str, qty: int) -> int:
+        """Move up to qty units; returns actual moved (never creates equipment)."""
+        if qty <= 0 or from_batch == to_batch:
+            return 0
+        available = self.qty_on_batch(model, from_batch)
+        qty = min(qty, available)
         if qty <= 0:
-            return
+            return 0
         self.allocation.setdefault(model, {})
-        self.allocation[model][from_batch] = max(0, self.qty_on_batch(model, from_batch) - qty)
+        self.allocation[model][from_batch] = available - qty
         self.allocation[model][to_batch] = self.qty_on_batch(model, to_batch) + qty
         if self.allocation[model].get(from_batch, 0) == 0:
             self.allocation[model].pop(from_batch, None)
+        return qty
 
 
 @dataclass
@@ -77,12 +83,30 @@ class SchedulingSimulator:
                 total += slot.plan_qty / slot_hours
         return total
 
-    def _validate_fleet(self, state: AllocationState) -> None:
-        for model in self.dataset.fleet_models():
-            on_line = state.total_for_model(model)
-            cap = self.dataset.fleet_qty(model)
-            if on_line > cap:
-                raise ValueError(f"Fleet exceeded for {model}: {on_line} > {cap}")
+    def find_donor_batch(
+        self, state: AllocationState, eqp_model_cd: str, exclude_batch: str
+    ) -> str | None:
+        batches = state.allocation.get(eqp_model_cd, {})
+        donors = [(b, q) for b, q in batches.items() if b != exclude_batch and q > 0]
+        if not donors:
+            return None
+        return max(donors, key=lambda x: x[1])[0]
+
+    def _resolve_from_batch(
+        self, state: AllocationState, conv: ConversionRecord
+    ) -> tuple[str, int]:
+        model = conv.eqp_model_cd
+        to_batch = conv.to_batch_id
+        qty = conv.eqp_qty
+        from_batch = (conv.from_batch or "").strip()
+        if from_batch and from_batch != to_batch:
+            available = state.qty_on_batch(model, from_batch)
+            return from_batch, min(qty, available)
+        donor = self.find_donor_batch(state, model, to_batch)
+        if not donor:
+            return "", 0
+        available = state.qty_on_batch(model, donor)
+        return donor, min(qty, available)
 
     def apply_conversions(
         self,
@@ -91,15 +115,10 @@ class SchedulingSimulator:
     ) -> AllocationState:
         state = initial_state or self._initial_state()
         for conv in conversions:
-            from_batch = conv.from_batch or "_POOL_"
-            qty = conv.eqp_qty
-            if qty <= 0:
+            from_batch, qty = self._resolve_from_batch(state, conv)
+            if qty <= 0 or not from_batch:
                 continue
-            available = state.qty_on_batch(conv.eqp_model_cd, from_batch)
-            if from_batch != "_POOL_" and available < qty:
-                qty = available
             state.move(conv.eqp_model_cd, from_batch, conv.to_batch_id, qty)
-            self._validate_fleet(state)
         return state
 
     def _initial_state(self) -> AllocationState:
