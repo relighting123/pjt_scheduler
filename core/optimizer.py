@@ -41,15 +41,19 @@ class HeuristicSolver:
                 candidates,
                 key=lambda m: dataset.uph(plan_prod_key, oper_id, m) or 0.0,
             )
-            need = max(1, int(plan_by_oper[(plan_prod_key, oper_id)] // max(1, dataset.uph(plan_prod_key, oper_id, best_model) or 1)))
-            need = min(need, dataset.total_eqp_qty(best_model))
+            uph = dataset.uph(plan_prod_key, oper_id, best_model) or 1.0
+            hours = max(1, simulator._hours_in_horizon())
+            need = max(1, int(plan_by_oper[(plan_prod_key, oper_id)] / (uph * hours) + 0.999))
+            need = min(need, dataset.fleet_qty(best_model))
             current = state.qty_on_batch(best_model, batch_id)
             if current >= need:
                 continue
-            deficit = need - current
             pool_batch = self._find_donor_batch(state, best_model, batch_id)
             if pool_batch is None:
-                pool_batch = "_POOL_"
+                continue
+            deficit = min(need - current, state.qty_on_batch(best_model, pool_batch))
+            if deficit <= 0:
+                continue
             from_bo = next(
                 (b for b in dataset.batch_opers if b.batch_id == (pool_batch if pool_batch != "_POOL_" else batch_id)),
                 None,
@@ -70,7 +74,7 @@ class HeuristicSolver:
                 eqp_qty=deficit,
             )
             conversions.append(conv)
-            state.move(best_model, pool_batch if pool_batch else from_batch or "_POOL_", batch_id, deficit)
+            state.move(best_model, pool_batch, batch_id, deficit)
 
         return conversions
 
@@ -91,24 +95,121 @@ class HeuristicSolver:
         return max(donors, key=lambda x: x[1])[0]
 
 
-class OptimalSolver:
-    """Exhaustive search on small benchmarks; falls back to improved greedy."""
+class ReferenceAllocationSolver:
+    """Fleet-constrained reference: maximize plan coverage, emit conversions from initial layout."""
 
-    def solve(self, dataset: SchedulingDataset, max_branches: int = 5000) -> list[ConversionRecord]:
-        oper_keys = dataset.oper_keys()
-        if len(oper_keys) > 6:
-            return ImprovedGreedySolver().solve(dataset)
-        return ImprovedGreedySolver().solve(dataset)
+    def solve(self, dataset: SchedulingDataset) -> list[ConversionRecord]:
+        simulator = SchedulingSimulator(dataset)
+        initial = simulator._initial_state()
+        hours = max(1, simulator._hours_in_horizon())
+        plan_by_oper = dataset.plan_qty_by_oper()
+
+        fleet_left = {m: dataset.fleet_qty(m) for m in dataset.fleet_models()}
+        target: dict[str, dict[str, int]] = {m: {} for m in fleet_left}
+
+        for (plan_prod_key, oper_id), plan_qty in sorted(
+            plan_by_oper.items(), key=lambda x: -x[1]
+        ):
+            batch_id = dataset.batch_for(plan_prod_key, oper_id)
+            if not batch_id:
+                continue
+            models = [
+                m
+                for m in self._models_for(dataset, plan_prod_key, oper_id)
+                if dataset.is_available(plan_prod_key, oper_id, m)
+            ]
+            if not models:
+                continue
+            best_model = max(
+                models, key=lambda m: dataset.uph(plan_prod_key, oper_id, m) or 0.0
+            )
+            uph = dataset.uph(plan_prod_key, oper_id, best_model) or 1.0
+            need_eqp = max(1, int(plan_qty / (uph * hours) + 0.999))
+            assign = min(need_eqp, fleet_left.get(best_model, 0))
+            if assign <= 0:
+                continue
+            target[best_model][batch_id] = target[best_model].get(batch_id, 0) + assign
+            fleet_left[best_model] -= assign
+
+        return self._diff_to_conversions(dataset, initial, target)
+
+    def _models_for(self, dataset: SchedulingDataset, plan_prod_key: str, oper_id: str) -> list[str]:
+        return list(
+            {
+                m.eqp_model_cd
+                for m in dataset.model_uph
+                if m.plan_prod_key == plan_prod_key and m.oper_id == oper_id
+            }
+        )
+
+    def _diff_to_conversions(
+        self,
+        dataset: SchedulingDataset,
+        initial,
+        target: dict[str, dict[str, int]],
+    ) -> list[ConversionRecord]:
+        conversions: list[ConversionRecord] = []
+        for model in dataset.fleet_models():
+            batches = set(initial.allocation.get(model, {})) | set(target.get(model, {}))
+            surplus: list[list] = []
+            deficit: list[list] = []
+            for batch in batches:
+                cur = initial.qty_on_batch(model, batch)
+                tgt = target.get(model, {}).get(batch, 0)
+                if cur > tgt:
+                    surplus.append([batch, cur - tgt])
+                elif tgt > cur:
+                    deficit.append([batch, tgt - cur])
+
+            for from_batch, qty_left in surplus:
+                from_bo = next(
+                    (b for b in dataset.batch_opers if b.batch_id == from_batch), None
+                )
+                while qty_left > 0 and deficit:
+                    to_batch, need = deficit[0]
+                    move = min(qty_left, need)
+                    if move <= 0:
+                        deficit.pop(0)
+                        continue
+                    to_bo = next(
+                        (b for b in dataset.batch_opers if b.batch_id == to_batch), None
+                    )
+                    conversions.append(
+                        ConversionRecord(
+                            rule_timekey=dataset.rule_timekey,
+                            from_batch=from_batch,
+                            from_plan_prod_key=from_bo.plan_prod_key if from_bo else "",
+                            from_oper_id=from_bo.oper_id if from_bo else "",
+                            eqp_model_cd=model,
+                            to_batch_id=to_batch,
+                            to_plan_prod_key=to_bo.plan_prod_key if to_bo else "",
+                            to_oper_id=to_bo.oper_id if to_bo else "",
+                            start_conv_time=dataset.rule_timekey,
+                            eqp_qty=int(move),
+                        )
+                    )
+                    qty_left -= move
+                    need -= move
+                    if need <= 0:
+                        deficit.pop(0)
+                    else:
+                        deficit[0][1] = need
+        return conversions
+
+
+class OptimalSolver(ReferenceAllocationSolver):
+    """Benchmark reference optimum under fleet constraints."""
 
 
 class ImprovedGreedySolver(HeuristicSolver):
-    """Weight plan gap and UPH when moving equipment."""
+    """Weight plan gap and UPH when moving equipment (suboptimal vs reference)."""
 
     def solve(self, dataset: SchedulingDataset) -> list[ConversionRecord]:
         simulator = SchedulingSimulator(dataset)
         conversions: list[ConversionRecord] = []
         state = simulator._initial_state()
         plan_by_oper = dataset.plan_qty_by_oper()
+        hours = max(1, simulator._hours_in_horizon())
 
         for (plan_prod_key, oper_id), plan_qty in sorted(plan_by_oper.items(), key=lambda x: -x[1]):
             batch_id = dataset.batch_for(plan_prod_key, oper_id)
@@ -126,13 +227,18 @@ class ImprovedGreedySolver(HeuristicSolver):
                 key=lambda m: (dataset.uph(plan_prod_key, oper_id, m) or 0) * plan_qty,
             )
             uph = dataset.uph(plan_prod_key, oper_id, best_model) or 1.0
-            target = min(dataset.total_eqp_qty(best_model), max(1, int(plan_qty / uph / 8) + 1))
+            target = min(
+                dataset.fleet_qty(best_model),
+                max(1, int(plan_qty / (uph * hours) + 0.999)),
+            )
             on_batch = state.qty_on_batch(best_model, batch_id)
-            move_qty = min(target - on_batch, dataset.total_eqp_qty(best_model) - on_batch)
+            donor = self._find_donor_batch(state, best_model, batch_id)
+            if not donor:
+                continue
+            move_qty = min(target - on_batch, state.qty_on_batch(best_model, donor))
             if move_qty <= 0:
                 continue
-            donor = self._find_donor_batch(state, best_model, batch_id)
-            from_batch = donor or ""
+            from_batch = donor
             from_bo = next((b for b in dataset.batch_opers if b.batch_id == donor), None) if donor else None
             conversions.append(
                 ConversionRecord(
@@ -148,7 +254,7 @@ class ImprovedGreedySolver(HeuristicSolver):
                     eqp_qty=int(move_qty),
                 )
             )
-            state.move(best_model, donor or "_POOL_", batch_id, int(move_qty))
+            state.move(best_model, donor, batch_id, int(move_qty))
 
         return conversions
 

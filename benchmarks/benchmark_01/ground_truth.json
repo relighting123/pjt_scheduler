@@ -1,5 +1,21 @@
 {
   "RULE_TIMEKEY": "2026051707000000",
-  "expected_avg_achievement": 1.0,
-  "conversions": []
+  "expected_avg_achievement": 0.7964426877470356,
+  "naive_initial_achievement": 0.5,
+  "heuristic_achievement": 0.5,
+  "conversion_count": 1,
+  "conversions": [
+    {
+      "RULE_TIMEKEY": "2026051707000000",
+      "FROM_BATCH": "B1",
+      "FROM_PLAN_PROD_KEY": "P1/PROD1",
+      "FROM_OPER_ID": "OP001",
+      "EQP_MODEL_CD": "M2",
+      "TO_BATCH_ID": "B2",
+      "TO_PLAN_PROD_KEY": "P1/PROD2",
+      "TO_OPER_ID": "OP002",
+      "START_CONV_TIME": "2026051707000000",
+      "EQP_QTY": 2
+    }
+  ]
 }

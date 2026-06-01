@@ -1,5 +1,21 @@
 {
   "RULE_TIMEKEY": "2026052107000000",
-  "expected_avg_achievement": 1.0,
-  "conversions": []
+  "expected_avg_achievement": 0.466304347826087,
+  "naive_initial_achievement": 0.4671875,
+  "heuristic_achievement": 0.4671875,
+  "conversion_count": 1,
+  "conversions": [
+    {
+      "RULE_TIMEKEY": "2026052107000000",
+      "FROM_BATCH": "B1",
+      "FROM_PLAN_PROD_KEY": "P5/PROD1",
+      "FROM_OPER_ID": "OP001",
+      "EQP_MODEL_CD": "MAGNUM5",
+      "TO_BATCH_ID": "B2",
+      "TO_PLAN_PROD_KEY": "P5/PROD2",
+      "TO_OPER_ID": "OP002",
+      "START_CONV_TIME": "2026052107000000",
+      "EQP_QTY": 2
+    }
+  ]
 }

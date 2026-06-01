@@ -1,6 +1,6 @@
 # Model Benchmark Record
 
-Updated: 2026-06-02T00:14:14
+Updated: 2026-06-02T00:18:38
 
 | Benchmark | Optimal Avg | Heuristic Avg | RL Avg | Optimal Conv | RL Conv |
 |-----------|-------------|---------------|--------|--------------|---------|

@@ -8,6 +8,7 @@ from pathlib import Path
 from core.domain import SchedulingDataset
 from core.evaluation import (
     evaluate_all_benchmark_datasets,
+    evaluate_dataset,
     render_html_report,
     update_benchmark_markdown,
 )
@@ -134,3 +135,43 @@ def run_inference(
         pass
 
     return out_path
+
+
+def run_inference_all_benchmarks(
+    benchmarks_root: str | Path = "benchmarks",
+    output_dir: str | Path | None = None,
+    report_path: str | Path | None = None,
+    model_path: str | Path | None = None,
+) -> tuple[Path, dict[str, Path]]:
+    """Run inference on every benchmark, save CSVs, and write HTML summary."""
+    settings = _load_settings()
+    bench_root = Path(benchmarks_root)
+    out_dir = Path(
+        output_dir or settings.get("artifacts", {}).get("inference_dir", "artifacts/inference")
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    model = Path(model_path or settings.get("artifacts", {}).get("model_dir", "artifacts/models")) / "ppo_scheduling"
+
+    csv_paths: dict[str, Path] = {}
+    csv_links: dict[str, str] = {}
+    results = {}
+
+    for bench_dir in sorted(bench_root.glob("benchmark_*")):
+        if not bench_dir.is_dir():
+            continue
+        name = bench_dir.name
+        dataset = SchedulingDataset.from_csv_dir(bench_dir)
+        conversions = infer_conversions(dataset, model)
+        csv_out = out_dir / f"{name}_allocation.csv"
+        dataset.to_conversions_df(conversions).to_csv(csv_out, index=False)
+        csv_paths[name] = csv_out
+        csv_links[name] = csv_out.as_posix()
+        results[name] = evaluate_dataset(bench_dir, policy_conversions=conversions, policy_name="RL")
+    update_benchmark_markdown(results)
+
+    report_dir = settings.get("artifacts", {}).get("report_dir", "artifacts/reports")
+    html_out = Path(report_path or Path(report_dir) / "inference_summary.html")
+    render_html_report(results, html_out, csv_links=csv_links)
+
+    return html_out, csv_paths

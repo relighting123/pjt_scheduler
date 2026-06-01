@@ -27,6 +27,21 @@ def main(argv: list[str] | None = None) -> int:
     infer_p.add_argument("--benchmark-dataset", default=None)
     infer_p.add_argument("--output", default=None)
 
+    infer_all_p = sub.add_parser(
+        "infer-all",
+        help="Infer on all benchmarks, save CSVs, and open HTML summary report",
+    )
+    infer_all_p.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory for per-benchmark allocation CSV (default: artifacts/inference)",
+    )
+    infer_all_p.add_argument(
+        "--report",
+        default=None,
+        help="HTML report path (default: artifacts/reports/inference_summary.html)",
+    )
+
     sub.add_parser("eval", help="Evaluate all benchmarks (optimal vs heuristic vs RL)")
 
     args = parser.parse_args(argv)
@@ -54,6 +69,18 @@ def main(argv: list[str] | None = None) -> int:
             output=args.output,
         )
         print(f"Allocation written: {out}")
+        return 0
+
+    if args.command == "infer-all":
+        from biz.pipeline import run_inference_all_benchmarks
+
+        report, csv_paths = run_inference_all_benchmarks(
+            output_dir=args.output_dir,
+            report_path=args.report,
+        )
+        print(f"HTML summary: {report.resolve()}")
+        for name, path in csv_paths.items():
+            print(f"  {name}: {path.resolve()}")
         return 0
 
     if args.command == "eval":

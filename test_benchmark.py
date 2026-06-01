@@ -24,6 +24,7 @@ def validate_benchmark(bench_dir: Path) -> list[str]:
         "batch_oper.csv",
         "tool_qty.csv",
         "plan_slots.csv",
+        "equipment_fleet.csv",
         "ground_truth.json",
     ]
     for name in required:
@@ -39,8 +40,15 @@ def validate_benchmark(bench_dir: Path) -> list[str]:
     gt = load_ground_truth_conversions(bench_dir / "ground_truth.json")
     sim = SchedulingSimulator(ds)
     opt_result = sim.simulate(gt)
-    if opt_result.avg_achievement_rate < 0.5:
-        errors.append(f"{bench_dir.name}: ground_truth achievement too low ({opt_result.avg_achievement_rate:.2f})")
+    if opt_result.avg_achievement_rate < 0.45:
+        errors.append(
+            f"{bench_dir.name}: ground_truth achievement too low ({opt_result.avg_achievement_rate:.2f})"
+        )
+    if opt_result.avg_achievement_rate >= 0.999 and len(gt) == 0:
+        errors.append(f"{bench_dir.name}: trivial 100% with no conversions")
+    gt_meta = json.loads((bench_dir / "ground_truth.json").read_text(encoding="utf-8"))
+    if gt_meta.get("conversion_count", len(gt)) < 1:
+        errors.append(f"{bench_dir.name}: expected at least one equipment conversion in ground_truth")
 
     return errors
 

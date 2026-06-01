@@ -77,6 +77,13 @@ class SchedulingSimulator:
                 total += slot.plan_qty / slot_hours
         return total
 
+    def _validate_fleet(self, state: AllocationState) -> None:
+        for model in self.dataset.fleet_models():
+            on_line = state.total_for_model(model)
+            cap = self.dataset.fleet_qty(model)
+            if on_line > cap:
+                raise ValueError(f"Fleet exceeded for {model}: {on_line} > {cap}")
+
     def apply_conversions(
         self,
         conversions: list[ConversionRecord],
@@ -85,7 +92,14 @@ class SchedulingSimulator:
         state = initial_state or self._initial_state()
         for conv in conversions:
             from_batch = conv.from_batch or "_POOL_"
-            state.move(conv.eqp_model_cd, from_batch, conv.to_batch_id, conv.eqp_qty)
+            qty = conv.eqp_qty
+            if qty <= 0:
+                continue
+            available = state.qty_on_batch(conv.eqp_model_cd, from_batch)
+            if from_batch != "_POOL_" and available < qty:
+                qty = available
+            state.move(conv.eqp_model_cd, from_batch, conv.to_batch_id, qty)
+            self._validate_fleet(state)
         return state
 
     def _initial_state(self) -> AllocationState:

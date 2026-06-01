@@ -113,16 +113,48 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
   <meta charset="utf-8"/>
   <title>Scheduling Benchmark Report</title>
   <style>
-    body { font-family: sans-serif; margin: 2rem; }
+    body { font-family: sans-serif; margin: 2rem; max-width: 1200px; }
     table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
     th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
     th { background: #f0f0f0; }
     h2 { margin-top: 2rem; }
+    .summary { background: #f8f9fa; padding: 1rem; border-radius: 6px; margin-bottom: 2rem; }
+    .good { color: #0a7; }
+    .warn { color: #c60; }
+    a { color: #06c; }
+    td.num { text-align: right; }
   </style>
 </head>
 <body>
   <h1>Equipment Transition Scheduling — Benchmark Report</h1>
   <p>Generated: {{ generated_at }}</p>
+  {% if summary_rows %}
+  <div class="summary">
+    <h2>전체 요약</h2>
+    <table>
+      <tr>
+        <th>Benchmark</th>
+        <th>최적해 달성률</th>
+        <th>추론 달성률</th>
+        <th>차이</th>
+        <th>최적 전환</th>
+        <th>추론 전환</th>
+        <th>CSV</th>
+      </tr>
+      {% for row in summary_rows %}
+      <tr>
+        <td>{{ row.bench }}</td>
+        <td class="num">{{ "%.2f"|format(row.optimal_pct) }}%</td>
+        <td class="num">{{ "%.2f"|format(row.infer_pct) }}%</td>
+        <td class="num {{ row.gap_class }}">{{ "%.2f"|format(row.gap_pct) }}%p</td>
+        <td class="num">{{ row.optimal_conv }}</td>
+        <td class="num">{{ row.infer_conv }}</td>
+        <td>{% if row.csv_href %}<a href="{{ row.csv_href }}">allocation.csv</a>{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
   {% for bench, rows in benchmarks.items() %}
   <h2>{{ bench }}</h2>
   <table>
@@ -130,20 +162,83 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
     {% for row in rows %}
     <tr>
       <td>{{ row.method }}</td>
-      <td>{{ "%.2f"|format(row.achievement * 100) }}%</td>
-      <td>{{ row.conversions }}</td>
+      <td class="num">{{ "%.2f"|format(row.achievement * 100) }}%</td>
+      <td class="num">{{ row.conversions }}</td>
     </tr>
     {% endfor %}
   </table>
+  {% if oper_details.get(bench) %}
+  <h3>PLAN_PROD_KEY / OPER별 달성률</h3>
+  <table>
+    <tr><th>PLAN_PROD_KEY | OPER</th><th>최적해</th><th>추론</th></tr>
+    {% for oper in oper_details[bench] %}
+    <tr>
+      <td>{{ oper.key }}</td>
+      <td class="num">{{ "%.2f"|format(oper.optimal * 100) }}%</td>
+      <td class="num">{{ "%.2f"|format(oper.infer * 100) }}%</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
   {% endfor %}
 </body>
 </html>
 """
 
 
+def _build_oper_details(
+    results: dict[str, dict[str, EvalMetrics]],
+) -> dict[str, list[dict]]:
+    oper_details: dict[str, list[dict]] = {}
+    for bench, metrics in results.items():
+        opt = metrics.get("optimal")
+        infer = metrics.get("rl") or metrics.get("heuristic")
+        if not opt or not infer:
+            continue
+        keys = sorted(set(opt.achievement_by_oper) | set(infer.achievement_by_oper))
+        oper_details[bench] = [
+            {
+                "key": k,
+                "optimal": opt.achievement_by_oper.get(k, 0.0),
+                "infer": infer.achievement_by_oper.get(k, 0.0),
+            }
+            for k in keys
+        ]
+    return oper_details
+
+
+def _build_summary_rows(
+    results: dict[str, dict[str, EvalMetrics]],
+    csv_links: dict[str, str] | None = None,
+) -> list[dict]:
+    summary_rows: list[dict] = []
+    for bench, metrics in results.items():
+        opt = metrics.get("optimal")
+        infer = metrics.get("rl") or metrics.get("heuristic")
+        if not opt or not infer:
+            continue
+        opt_pct = opt.avg_achievement_rate * 100
+        infer_pct = infer.avg_achievement_rate * 100
+        gap = infer_pct - opt_pct
+        summary_rows.append(
+            {
+                "bench": bench,
+                "optimal_pct": opt_pct,
+                "infer_pct": infer_pct,
+                "gap_pct": gap,
+                "gap_class": "good" if gap >= -1 else "warn",
+                "optimal_conv": opt.conversion_count,
+                "infer_conv": infer.conversion_count,
+                "csv_href": (csv_links or {}).get(bench, ""),
+            }
+        )
+    return summary_rows
+
+
 def render_html_report(
     results: dict[str, dict[str, EvalMetrics]],
     output_path: str | Path = "artifacts/reports/benchmark_report.html",
+    csv_links: dict[str, str] | None = None,
 ) -> Path:
     benchmarks: dict[str, list[dict]] = {}
     for bench, metrics in results.items():
@@ -163,6 +258,8 @@ def render_html_report(
     html = Template(REPORT_TEMPLATE).render(
         generated_at=datetime.now().isoformat(timespec="seconds"),
         benchmarks=benchmarks,
+        summary_rows=_build_summary_rows(results, csv_links),
+        oper_details=_build_oper_details(results),
     )
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -45,6 +45,15 @@ class EqpCount:
 
 
 @dataclass
+class EquipmentFleet:
+    """Global equipment pool per model (physical fleet cap)."""
+
+    rule_timekey: str
+    eqp_model_cd: str
+    fleet_qty: int
+
+
+@dataclass
 class ToolQty:
     rule_timekey: str
     batch_id: str
@@ -106,6 +115,7 @@ class SchedulingDataset:
     oper_wip: list[OperWip] = field(default_factory=list)
     model_uph: list[ModelUph] = field(default_factory=list)
     eqp_counts: list[EqpCount] = field(default_factory=list)
+    equipment_fleet: list[EquipmentFleet] = field(default_factory=list)
     model_avail: list[ModelAvail] = field(default_factory=list)
     batch_opers: list[BatchOper] = field(default_factory=list)
     tool_qty: list[ToolQty] = field(default_factory=list)
@@ -137,8 +147,23 @@ class SchedulingDataset:
                 return str(row.avail_yn).upper() in ("Y", "YES", "1", "TRUE")
         return False
 
-    def total_eqp_qty(self, eqp_model_cd: str) -> int:
+    def assigned_qty(self, eqp_model_cd: str) -> int:
         return sum(e.eqp_qty for e in self.eqp_counts if e.eqp_model_cd == eqp_model_cd)
+
+    def fleet_qty(self, eqp_model_cd: str) -> int:
+        for row in self.equipment_fleet:
+            if row.eqp_model_cd == eqp_model_cd:
+                return row.fleet_qty
+        return self.assigned_qty(eqp_model_cd)
+
+    def total_eqp_qty(self, eqp_model_cd: str) -> int:
+        """Alias for fleet capacity (not summed per-batch assignments)."""
+        return self.fleet_qty(eqp_model_cd)
+
+    def fleet_models(self) -> list[str]:
+        if self.equipment_fleet:
+            return sorted({f.eqp_model_cd for f in self.equipment_fleet})
+        return sorted({e.eqp_model_cd for e in self.eqp_counts})
 
     def oper_keys(self) -> list[tuple[str, str]]:
         keys: list[tuple[str, str]] = []
@@ -172,6 +197,13 @@ class SchedulingDataset:
             for model in models:
                 if self.uph(plan_prod_key, oper_id, model) is None:
                     errors.append(f"UPH missing: {plan_prod_key}/{oper_id}/{model}")
+        for model in self.fleet_models():
+            assigned = self.assigned_qty(model)
+            fleet = self.fleet_qty(model)
+            if assigned > fleet:
+                errors.append(
+                    f"Assigned {assigned} exceeds fleet {fleet} for model {model}"
+                )
         return errors
 
     @classmethod
@@ -224,6 +256,16 @@ class SchedulingDataset:
                     batch_id=str(r["BATCH_ID"]),
                     eqp_model_cd=str(r["EQP_MODEL_CD"]),
                     eqp_qty=int(r["EQP_QTY"]),
+                )
+            )
+
+        fleet_df = _read("equipment_fleet.csv")
+        for _, r in fleet_df.iterrows():
+            ds.equipment_fleet.append(
+                EquipmentFleet(
+                    rule_timekey=str(r.get("RULE_TIMEKEY", rtk)),
+                    eqp_model_cd=str(r["EQP_MODEL_CD"]),
+                    fleet_qty=int(r["FLEET_QTY"]),
                 )
             )
 
