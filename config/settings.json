@@ -1,0 +1,23 @@
+{
+  "oracle": {
+    "host": "localhost",
+    "port": 1521,
+    "service_name": "XEPDB1",
+    "user": "dispatcher",
+    "password": "dispatcher",
+    "source_table": "RTS_LINEDSDB_INF",
+    "wip_info_table": "WIP_INFO",
+    "output_table": "RTD_CONV_INF",
+    "history_table": "RTD_CONV_HIS"
+  },
+  "artifacts": {
+    "model_dir": "artifacts/models",
+    "report_dir": "artifacts/reports",
+    "inference_dir": "artifacts/inference"
+  },
+  "training": {
+    "imitation_epochs": 20,
+    "ppo_steps_default": 50000,
+    "benchmark_count": 7
+  }
+}
