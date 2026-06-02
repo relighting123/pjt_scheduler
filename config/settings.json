@@ -8,15 +8,24 @@
     "history_table": "RTD_CONV_HIS"
   },
   "model": {
+    "mode": "wip-static",
     "artifact_dir": "artifacts/models",
     "policy_name": "ppo_dispatch",
     "imitation_epochs": 30,
+    "imitation_epochs_dynamic": 1500,
     "ppo_total_steps": 50000,
+    "ppo_total_steps_dynamic": 0,
     "ppo_n_steps": 512,
     "ppo_batch_size": 64,
     "ppo_learning_rate": 3e-4,
     "ppo_gamma": 0.99,
+    "ppo_ent_coef": 0.01,
     "seed": 7
+  },
+  "dynamic": {
+    "num_slots": 4,
+    "slot_hours": 1.0,
+    "switch_time_hours": 0.0
   },
   "reward": {
     "achievement_weight": 1.0,

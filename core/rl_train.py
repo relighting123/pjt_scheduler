@@ -76,6 +76,7 @@ def train(
     ppo_gamma: float = 0.99,
     switch_penalty: float = 0.02,
     achievement_weight: float = 1.0,
+    ignore_wip: bool = False,
     seed: int = 7,
 ) -> str:
     """Run imitation warm-start + PPO. Returns the path to the saved policy."""
@@ -94,6 +95,7 @@ def train(
             problems,
             switch_penalty=switch_penalty,
             achievement_weight=achievement_weight,
+            ignore_wip=ignore_wip,
             seed=seed,
         )
 

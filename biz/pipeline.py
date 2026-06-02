@@ -1,12 +1,28 @@
-"""End-to-end orchestration: load -> simulate/train/infer -> persist + report."""
+"""End-to-end orchestration: load -> simulate/train/infer -> persist + report.
+
+Three scheduling models are exposed as the ``mode`` option:
+
+  plan-only  — calculate purely from the plan, WIP is treated as unlimited
+               (the original phase-0 behaviour).
+  wip-static — single-snapshot with WIP cap (phase 1; the default).
+  dynamic    — multi-period WIP-flow + switch cost (phase 2/3). Time is
+               sliced into `num_slots` of `slot_hours` and equipment can
+               move between slots, paying `switch_time_hours` per move.
+
+Training, inference and evaluation are dispatched by mode; models are
+saved under mode-suffixed names so a snapshot can carry all three.
+"""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from typing import List, Optional
 
-from core.domain import SchedulingProblem
-from core.evaluation import evaluate_all_benchmark_datasets
+from core.domain import AllocationSet, SchedulingProblem
+from core.evaluation import (
+    evaluate_all_benchmark_datasets,
+    evaluate_all_benchmark_datasets_dynamic,
+)
 from core.heuristic import greedy_allocate
 from core.report import render_html, render_markdown
 from core.rl_infer import infer as rl_infer
@@ -19,9 +35,25 @@ from .data_loader import (
 )
 from .output_writer import build_conversion_rows, write_csv, write_oracle
 
+MODES = ("plan-only", "wip-static", "dynamic")
+
 
 def load_settings(path: str | Path) -> dict:
     return json.loads(Path(path).read_text())
+
+
+def resolve_mode(settings: dict, override: Optional[str]) -> str:
+    mode = (override or settings.get("model", {}).get("mode", "wip-static")).lower()
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    return mode
+
+
+def model_path_for(settings: dict, mode: str) -> str:
+    """Mode-suffixed path so all three models can coexist on disk."""
+    m = settings["model"]
+    suffix = mode.replace("-", "_")
+    return str(Path(m["artifact_dir"]) / f"{m['policy_name']}_{suffix}.zip")
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +89,7 @@ def _problems_for_training(
         conn.close()
 
 
+# ---------------------------------------------------------------------------
 def run_train(
     settings: dict,
     from_timekey: Optional[str] = None,
@@ -64,41 +97,99 @@ def run_train(
     rule_timekey: Optional[str] = None,
     benchmark_dataset: Optional[str] = None,
     steps: Optional[int] = None,
+    mode: Optional[str] = None,
 ) -> dict:
-    from core.rl_train import train
-
+    mode = resolve_mode(settings, mode)
     problems = _problems_for_training(settings, from_timekey, to_timekey, rule_timekey, benchmark_dataset)
     if not problems:
         raise RuntimeError("No training problems found for the given range.")
 
     model_cfg = settings["model"]
     reward_cfg = settings.get("reward", {})
-    save_path = train(
-        problems=problems,
-        artifact_dir=model_cfg["artifact_dir"],
-        policy_name=model_cfg["policy_name"],
-        imitation_epochs=int(model_cfg.get("imitation_epochs", 30)),
-        ppo_total_steps=int(steps or model_cfg.get("ppo_total_steps", 50000)),
-        ppo_n_steps=int(model_cfg.get("ppo_n_steps", 512)),
-        ppo_batch_size=int(model_cfg.get("ppo_batch_size", 64)),
-        ppo_learning_rate=float(model_cfg.get("ppo_learning_rate", 3e-4)),
-        ppo_gamma=float(model_cfg.get("ppo_gamma", 0.99)),
-        switch_penalty=float(reward_cfg.get("switch_penalty", 0.02)),
-        achievement_weight=float(reward_cfg.get("achievement_weight", 1.0)),
-        seed=int(model_cfg.get("seed", 7)),
-    )
+    save_path = model_path_for(settings, mode)
 
-    # benchmark + reports
-    bench = settings.get("benchmark", {})
-    results = evaluate_all_benchmark_datasets(bench.get("dataset_root", "benchmarks"), model_path=save_path)
-    html_path = render_html(results, bench.get("report_path", "artifacts/reports/benchmark.html"))
-    md_path = render_markdown(results, bench.get("summary_md", "MODEL_BENCHMARK.md"))
+    if mode == "dynamic":
+        from core.rl_train_mp import train_multiperiod
+        dyn = settings.get("dynamic", {})
+        train_multiperiod(
+            problems=problems,
+            num_slots=int(dyn.get("num_slots", 4)),
+            slot_hours=float(dyn.get("slot_hours", 1.0)),
+            switch_time_hours=float(dyn.get("switch_time_hours", 0.0)),
+            artifact_dir=str(Path(save_path).parent),
+            policy_name=Path(save_path).stem,
+            imitation_epochs=int(model_cfg.get("imitation_epochs_dynamic", 1500)),
+            ppo_total_steps=int(steps or model_cfg.get("ppo_total_steps_dynamic", 0)),
+            ppo_n_steps=int(model_cfg.get("ppo_n_steps", 256)),
+            ppo_batch_size=int(model_cfg.get("ppo_batch_size", 64)),
+            ppo_learning_rate=float(model_cfg.get("ppo_learning_rate", 3e-4)),
+            ppo_gamma=float(model_cfg.get("ppo_gamma", 0.99)),
+            ppo_ent_coef=float(model_cfg.get("ppo_ent_coef", 0.01)),
+            seed=int(model_cfg.get("seed", 7)),
+        )
+    else:
+        from core.rl_train import train
+        train(
+            problems=problems,
+            artifact_dir=str(Path(save_path).parent),
+            policy_name=Path(save_path).stem,
+            imitation_epochs=int(model_cfg.get("imitation_epochs", 30)),
+            ppo_total_steps=int(steps or model_cfg.get("ppo_total_steps", 50000)),
+            ppo_n_steps=int(model_cfg.get("ppo_n_steps", 512)),
+            ppo_batch_size=int(model_cfg.get("ppo_batch_size", 64)),
+            ppo_learning_rate=float(model_cfg.get("ppo_learning_rate", 3e-4)),
+            ppo_gamma=float(model_cfg.get("ppo_gamma", 0.99)),
+            switch_penalty=float(reward_cfg.get("switch_penalty", 0.02)),
+            achievement_weight=float(reward_cfg.get("achievement_weight", 1.0)),
+            ignore_wip=(mode == "plan-only"),
+            seed=int(model_cfg.get("seed", 7)),
+        )
+
+    # benchmark + reports for this mode
+    eval_result = _eval_for_mode(settings, mode, save_path)
     return {
+        "mode": mode,
         "model_path": save_path,
+        "n_problems": len(problems),
+        **eval_result,
+    }
+
+
+# ---------------------------------------------------------------------------
+def _eval_for_mode(settings: dict, mode: str, model_path: Optional[str]) -> dict:
+    bench = settings.get("benchmark", {})
+    root = bench.get("dataset_root", "benchmarks")
+    if model_path and not Path(model_path).exists():
+        model_path = None
+    if mode == "dynamic":
+        dyn = settings.get("dynamic", {})
+        results = evaluate_all_benchmark_datasets_dynamic(
+            root,
+            model_path=model_path,
+            num_slots=int(dyn.get("num_slots", 4)),
+            slot_hours=float(dyn.get("slot_hours", 1.0)),
+            switch_time_hours=float(dyn.get("switch_time_hours", 0.0)),
+        )
+    else:
+        results = evaluate_all_benchmark_datasets(
+            root, model_path=model_path, ignore_wip=(mode == "plan-only"),
+        )
+    suffix = mode.replace("-", "_")
+    html_path = bench.get("report_path", "artifacts/reports/benchmark.html").replace(
+        ".html", f"_{suffix}.html"
+    )
+    md_path = bench.get("summary_md", "MODEL_BENCHMARK.md").replace(
+        ".md", f"_{suffix}.md"
+    )
+    render_html(results, html_path)
+    render_markdown(results, md_path)
+    return {
         "report_html": html_path,
         "report_md": md_path,
-        "n_problems": len(problems),
         "n_benchmarks": len(results),
+        "avg_optimal": (sum(r.optimal.avg_achievement for r in results) / len(results)) if results else 0.0,
+        "avg_rl": (sum(r.rl.avg_achievement for r in results) / len(results)) if results else 0.0,
+        "avg_heuristic": (sum(r.heuristic.avg_achievement for r in results) / len(results)) if results else 0.0,
     }
 
 
@@ -108,18 +199,22 @@ def run_infer(
     rule_timekey: Optional[str] = None,
     benchmark_dataset: Optional[str] = None,
     output_csv: Optional[str] = None,
+    mode: Optional[str] = None,
 ) -> dict:
-    model_cfg = settings["model"]
-    model_path = str(Path(model_cfg["artifact_dir"]) / f"{model_cfg['policy_name']}.zip")
+    mode = resolve_mode(settings, mode)
+    model_path = model_path_for(settings, mode)
+    if not Path(model_path).exists():
+        model_path = None
 
     if benchmark_dataset:
         problem = load_problem_from_csv_dir(benchmark_dataset)
-        allocation = rl_infer(problem, model_path=model_path)
+        allocation = _infer_one(problem, model_path, mode, settings)
         rows = build_conversion_rows(problem.rule_timekey, None, allocation)
         if not output_csv:
-            output_csv = str(Path("artifacts/inference") / f"{problem.rule_timekey}.csv")
+            output_csv = str(Path("artifacts/inference") / f"{problem.rule_timekey}_{mode}.csv")
         write_csv(output_csv, rows)
-        return {"mode": "benchmark", "rule_timekey": problem.rule_timekey, "rows": len(rows), "output": output_csv}
+        return {"mode": mode, "source": "benchmark",
+                "rule_timekey": problem.rule_timekey, "rows": len(rows), "output": output_csv}
 
     conn = _connect(settings)
     try:
@@ -128,11 +223,8 @@ def run_infer(
         if not rk:
             raise RuntimeError("No RULE_TIMEKEY found in source table.")
         problem = load_problem_from_oracle(conn, oracle["source_table"], rk, settings.get("tool_groups", {}))
-        allocation = rl_infer(problem, model_path=model_path)
-        # previous snapshot for diff (latest prior RULE_TIMEKEY)
-        prev_keys = list_rule_timekeys(conn, oracle["source_table"], "00000000000000", rk)
-        previous_alloc = None  # the system persists conversion rows, not prior allocations
-        rows = build_conversion_rows(rk, previous_alloc, allocation)
+        allocation = _infer_one(problem, model_path, mode, settings)
+        rows = build_conversion_rows(rk, None, allocation)
         write_oracle(
             conn,
             output_table=oracle["output_table"],
@@ -140,26 +232,67 @@ def run_infer(
             rule_timekey=rk,
             rows=rows,
         )
-        return {"mode": "oracle", "rule_timekey": rk, "rows": len(rows)}
+        return {"mode": mode, "source": "oracle", "rule_timekey": rk, "rows": len(rows)}
     finally:
         conn.close()
 
 
+def _infer_one(problem: SchedulingProblem, model_path: Optional[str], mode: str, settings: dict) -> AllocationSet:
+    """Single allocation for the next time window. For `dynamic` mode this is
+    the first slot of the multi-period plan — the next snapshot re-decides."""
+    if mode == "dynamic":
+        return _infer_dynamic_first_slot(problem, model_path, settings)
+    if mode == "plan-only":
+        return rl_infer(problem, model_path=model_path, ignore_wip=True)
+    return rl_infer(problem, model_path=model_path, ignore_wip=False)
+
+
+def _infer_dynamic_first_slot(problem, model_path, settings) -> AllocationSet:
+    """Roll the dynamic policy for one slot and return that allocation."""
+    from core.flow import MultiPeriodSimulator, dynamic_greedy_policy
+    dyn = settings.get("dynamic", {})
+    num_slots = int(dyn.get("num_slots", 4))
+    slot_hours = float(dyn.get("slot_hours", 1.0))
+    switch_time_hours = float(dyn.get("switch_time_hours", 0.0))
+    sim = MultiPeriodSimulator(problem, num_slots, slot_hours, switch_time_hours)
+
+    if model_path and Path(model_path).exists():
+        try:
+            from stable_baselines3 import PPO
+            from core.rl_env_mp import MultiPeriodDispatchEnv
+            model = PPO.load(model_path)
+            env = MultiPeriodDispatchEnv(
+                [problem], num_slots=num_slots, slot_hours=slot_hours,
+                switch_time_hours=switch_time_hours, seed=0,
+            )
+            env._load_problem(problem)
+            obs = env._observation()
+            while env.slot_idx < 1:
+                action, _ = model.predict(obs, deterministic=True)
+                obs, _, term, trunc, _ = env.step(int(action))
+                if term or trunc:
+                    break
+            if env._prev_alloc is not None:
+                return env._prev_alloc
+        except Exception:
+            pass
+    # fallback: dynamic greedy for the first slot
+    plan = {(pk, op): qty for pk, op, qty in problem.plan_targets()}
+    wip = {(pk, op): problem.wip_of(pk, op) for pk, op, _ in problem.plan_targets()}
+    return dynamic_greedy_policy(problem, wip, plan, None, 0)
+
+
 # ---------------------------------------------------------------------------
-def run_eval(settings: dict) -> dict:
-    model_cfg = settings["model"]
-    bench = settings.get("benchmark", {})
-    model_path = str(Path(model_cfg["artifact_dir"]) / f"{model_cfg['policy_name']}.zip")
-    if not Path(model_path).exists():
-        model_path = None  # type: ignore
-    results = evaluate_all_benchmark_datasets(bench.get("dataset_root", "benchmarks"), model_path=model_path)
-    html_path = render_html(results, bench.get("report_path", "artifacts/reports/benchmark.html"))
-    md_path = render_markdown(results, bench.get("summary_md", "MODEL_BENCHMARK.md"))
-    return {
-        "report_html": html_path,
-        "report_md": md_path,
-        "n_benchmarks": len(results),
-        "avg_optimal": (sum(r.optimal.avg_achievement for r in results) / len(results)) if results else 0.0,
-        "avg_rl": (sum(r.rl.avg_achievement for r in results) / len(results)) if results else 0.0,
-        "avg_heuristic": (sum(r.heuristic.avg_achievement for r in results) / len(results)) if results else 0.0,
-    }
+def run_eval(settings: dict, mode: Optional[str] = None) -> dict:
+    """Evaluate one mode, or all three when mode == 'all'."""
+    mode = (mode or settings.get("model", {}).get("mode", "wip-static")).lower()
+    if mode == "all":
+        out = {}
+        for m in MODES:
+            mp = model_path_for(settings, m)
+            out[m] = _eval_for_mode(settings, m, mp)
+        return {"modes": out}
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES + ('all',)}, got {mode!r}")
+    mp = model_path_for(settings, mode)
+    return {"mode": mode, **_eval_for_mode(settings, mode, mp)}

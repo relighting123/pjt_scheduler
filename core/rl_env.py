@@ -38,6 +38,7 @@ class DispatchEnv(gym.Env if gym is not None else object):
         problems: List[SchedulingProblem],
         switch_penalty: float = 0.02,
         achievement_weight: float = 1.0,
+        ignore_wip: bool = False,
         seed: Optional[int] = None,
     ) -> None:
         if gym is None:
@@ -48,6 +49,7 @@ class DispatchEnv(gym.Env if gym is not None else object):
         self.problems = problems
         self.switch_penalty = float(switch_penalty)
         self.achievement_weight = float(achievement_weight)
+        self.ignore_wip = bool(ignore_wip)
         self._rng = np.random.default_rng(seed)
 
         # action: bucket_idx * (MAX_TARGETS + 1) + target_idx_or_noop
@@ -92,10 +94,13 @@ class DispatchEnv(gym.Env if gym is not None else object):
         for j, (pk, op, plan_qty) in enumerate(targets):
             self.target_plan[j] = float(plan_qty)
             self.target_shortfall[j] = float(plan_qty)
-            wip = problem.wip_of(pk, op)
-            # 0/negative WIP record => unlimited (back-compat with snapshots
-            # that omit WIP).
-            self.target_wip[j] = float(wip) if wip > 0 else float("inf")
+            if self.ignore_wip:
+                self.target_wip[j] = float("inf")
+            else:
+                wip = problem.wip_of(pk, op)
+                # 0/negative WIP record => unlimited (back-compat with snapshots
+                # that omit WIP).
+                self.target_wip[j] = float(wip) if wip > 0 else float("inf")
 
         plan_scale = max(1.0, float(self.target_plan.max()))
         for i, (b_id, model) in enumerate(self.bucket_keys):

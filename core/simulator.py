@@ -33,9 +33,10 @@ class Simulator:
     scaling PLAN_QTY in biz layer.
     """
 
-    def __init__(self, problem: SchedulingProblem, horizon_hours: float = 1.0) -> None:
+    def __init__(self, problem: SchedulingProblem, horizon_hours: float = 1.0, ignore_wip: bool = False) -> None:
         self.problem = problem
         self.horizon_hours = float(horizon_hours)
+        self.ignore_wip = bool(ignore_wip)
 
     def simulate(self, allocations: AllocationSet) -> SimulationResult:
         problem = self.problem
@@ -68,9 +69,10 @@ class Simulator:
         counted = 0
         for pk_op, plan_qty in result.plan_by_pko.items():
             actual = produced.get(pk_op, 0.0)
-            wip = problem.wip_of(*pk_op)
-            if wip > 0:
-                actual = min(actual, wip)
+            if not self.ignore_wip:
+                wip = problem.wip_of(*pk_op)
+                if wip > 0:
+                    actual = min(actual, wip)
             if plan_qty <= 0:
                 rate = 1.0 if actual >= 0 else 0.0
             else:

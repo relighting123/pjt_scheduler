@@ -122,9 +122,30 @@ ATTR_VAL : 각 항목별 GBN_CD에 해당하는 값
 ## Created Project Usage
 
 ```bash
-python run.py eval
+python run.py eval                                            # --mode wip-static (default)
+python run.py eval --mode all                                 # plan-only + wip-static + dynamic side-by-side
 python run.py train --benchmark-dataset benchmarks/benchmark_01 --steps 50000
 python run.py infer --benchmark-dataset benchmarks/benchmark_01 --output artifacts/inference/allocation.csv
+```
+
+### 모델 모드 (`--mode`)
+
+세 가지 모델을 옵션으로 학습/추론한다 (모드별 모델 파일은 자동으로
+`ppo_dispatch_<mode>.zip` 으로 분리 저장):
+
+- **`plan-only`** — 재공을 무시하고 계획만으로 산출 (초기 phase-0 가정).
+  benchmark_11 같은 재공 부족 케이스를 비현실적으로 100%로 추정한다.
+- **`wip-static`** — 단일 스냅샷 + WIP 캡 (Phase 1, 기본). 재공이 부족한
+  공정의 산출을 큐 크기로 제한한다.
+- **`dynamic`** — 멀티 피리어드 WIP 흐름 + 전환 시간 비용 (Phase 2/3).
+  horizon을 `dynamic.num_slots` 슬롯으로 쪼개고 슬롯마다 재배치;
+  앞공정→뒷공정 재공 흐름과 thrashing 회피까지 모델링.
+  `config/settings.json`의 `dynamic.{num_slots, slot_hours, switch_time_hours}`로 튜닝.
+
+```bash
+python run.py train --mode dynamic --benchmark-dataset benchmarks/benchmark_11
+python run.py infer --mode dynamic --benchmark-dataset benchmarks/benchmark_11
+python run.py eval  --mode all      # 세 모드 동시 평가, 모드별 리포트 출력
 ```
 
 - `core`: domain model, simulator, optimizer, evaluation, optional RL training interface.

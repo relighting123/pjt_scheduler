@@ -23,6 +23,13 @@ DEFAULT_SETTINGS = "config/settings.json"
 
 def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--settings", default=DEFAULT_SETTINGS, help="Path to settings.json")
+    p.add_argument(
+        "--mode",
+        choices=("plan-only", "wip-static", "dynamic", "all"),
+        help="Scheduling model. plan-only: ignore WIP. wip-static: single "
+             "snapshot with WIP cap (default). dynamic: multi-period WIP flow + "
+             "switch cost. 'all' is only valid for eval.",
+    )
 
 
 def _add_train_args(p: argparse.ArgumentParser) -> None:
@@ -61,6 +68,8 @@ def main(argv=None) -> int:
     settings = load_settings(args.settings)
 
     if args.command == "train":
+        if args.mode == "all":
+            parser.error("--mode all is only valid for eval")
         result = run_train(
             settings,
             from_timekey=args.from_timekey,
@@ -68,16 +77,20 @@ def main(argv=None) -> int:
             rule_timekey=args.rule_timekey,
             benchmark_dataset=args.benchmark_dataset,
             steps=args.steps,
+            mode=args.mode,
         )
     elif args.command == "infer":
+        if args.mode == "all":
+            parser.error("--mode all is only valid for eval")
         result = run_infer(
             settings,
             rule_timekey=args.rule_timekey,
             benchmark_dataset=args.benchmark_dataset,
             output_csv=args.output_csv,
+            mode=args.mode,
         )
     elif args.command == "eval":
-        result = run_eval(settings)
+        result = run_eval(settings, mode=args.mode)
     else:  # pragma: no cover
         parser.error(f"unknown command: {args.command}")
         return 2

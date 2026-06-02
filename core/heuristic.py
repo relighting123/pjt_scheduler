@@ -17,6 +17,7 @@ def greedy_allocate(
     wip_override: Dict[Tuple[str, str], float] | None = None,
     plan_override: Dict[Tuple[str, str], float] | None = None,
     treat_zero_as_unlimited: bool = True,
+    ignore_wip: bool = False,
 ) -> AllocationSet:
     """Greedy allocation for one time slice.
 
@@ -37,8 +38,12 @@ def greedy_allocate(
         else:
             remaining[(pk, op)] = qty
     # WIP cap: each target can produce at most the WIP currently in queue.
+    # `ignore_wip=True` reverts to the plan-only model (no queue constraint).
     wip_remaining: Dict[Tuple[str, str], float] = {}
     for (pk, op) in remaining:
+        if ignore_wip:
+            wip_remaining[(pk, op)] = float("inf")
+            continue
         if wip_override is not None and (pk, op) in wip_override:
             w = float(wip_override[(pk, op)])
         else:
