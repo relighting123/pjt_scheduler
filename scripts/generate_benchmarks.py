@@ -52,7 +52,7 @@ def _solve_optimal(spec: BenchmarkSpec) -> float:
     from core.optimizer import optimal_allocate
     from core.simulator import Simulator
 
-    wip = [WipRecord(spec.rule_timekey, pk, op, spec.oper_seq.get((pk, op), 1), spec.wip.get((pk, op), 0.0))
+    wip = [WipRecord(spec.rule_timekey, pk, op, spec.oper_seq.get((pk, op), 1), spec.wip.get((pk, op), 999999.0))
            for (pk, op, _) in spec.targets]
     uph = [UphRecord(spec.rule_timekey, pk, op, m, v) for (pk, op, m), v in spec.uph.items()]
     eqp = [EquipmentRecord(spec.rule_timekey, b, m, q) for (b, m, q) in spec.equipment]
@@ -78,7 +78,7 @@ def _write_dataset(spec: BenchmarkSpec) -> None:
 
     _write_csv(d / "wip_info.csv",
                ["rule_timekey", "plan_prod_key", "oper_id", "oper_seq", "wip_qty"],
-               [[spec.rule_timekey, pk, op, spec.oper_seq.get((pk, op), 1), spec.wip.get((pk, op), 0.0)]
+               [[spec.rule_timekey, pk, op, spec.oper_seq.get((pk, op), 1), spec.wip.get((pk, op), 999999.0)]
                 for (pk, op, _) in spec.targets])
 
     _write_csv(d / "uph.csv",
@@ -278,6 +278,23 @@ def _specs() -> List[BenchmarkSpec]:
         },
         tool_qty=[("9C/92", "T_GP", 1), ("9C/92", "T_OP10", 1), ("9C/92", "T_OP20", 1)],
         eqp_model_groups={"G001": ["9C/92"]},
+    ))
+
+    # 11) WIP shortage at downstream op — even with enough equipment, the
+    #     queue at OP20 only holds 50 units, so OP20 cannot exceed 50/200=0.25.
+    #     Validates that the simulator/heuristic/optimizer respect WIP.
+    specs.append(BenchmarkSpec(
+        name="benchmark_11",
+        description="WIP-limited downstream: OP20 has only 50 WIP. Optimal 0.625, not 1.0.",
+        rule_timekey="2026051707000011",
+        targets=[("P1", "OP10", 200.0), ("P1", "OP20", 200.0)],
+        oper_seq={("P1", "OP10"): 1, ("P1", "OP20"): 2},
+        batch_map={("P1", "OP10"): "9C/92", ("P1", "OP20"): "9C/92"},
+        equipment=[("9C/92", "T5833", 2)],
+        uph={("P1", "OP10", "T5833"): 200.0, ("P1", "OP20", "T5833"): 200.0},
+        tool_qty=[("9C/92", "T5833", 2)],
+        eqp_model_groups={"G001": ["9C/92"]},
+        wip={("P1", "OP10"): 999999.0, ("P1", "OP20"): 50.0},
     ))
     return specs
 

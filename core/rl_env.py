@@ -72,6 +72,7 @@ class DispatchEnv(gym.Env if gym is not None else object):
         self.bucket_free: np.ndarray = np.zeros(self.MAX_BUCKETS, dtype=np.int32)
         self.target_shortfall: np.ndarray = np.zeros(self.MAX_TARGETS, dtype=np.float32)
         self.target_plan: np.ndarray = np.zeros(self.MAX_TARGETS, dtype=np.float32)
+        self.target_wip: np.ndarray = np.zeros(self.MAX_TARGETS, dtype=np.float32)
         self.uph_matrix: np.ndarray = np.zeros((self.MAX_BUCKETS, self.MAX_TARGETS), dtype=np.float32)
         self.avail_matrix: np.ndarray = np.zeros((self.MAX_BUCKETS, self.MAX_TARGETS), dtype=np.float32)
         self._allocations: List[Allocation] = []
@@ -88,9 +89,13 @@ class DispatchEnv(gym.Env if gym is not None else object):
 
         targets = problem.plan_targets()[: self.MAX_TARGETS]
         self.target_keys = [(pk, op) for pk, op, _ in targets]
-        for j, (_, _, plan_qty) in enumerate(targets):
+        for j, (pk, op, plan_qty) in enumerate(targets):
             self.target_plan[j] = float(plan_qty)
             self.target_shortfall[j] = float(plan_qty)
+            wip = problem.wip_of(pk, op)
+            # 0/negative WIP record => unlimited (back-compat with snapshots
+            # that omit WIP).
+            self.target_wip[j] = float(wip) if wip > 0 else float("inf")
 
         plan_scale = max(1.0, float(self.target_plan.max()))
         for i, (b_id, model) in enumerate(self.bucket_keys):
@@ -141,8 +146,13 @@ class DispatchEnv(gym.Env if gym is not None else object):
                 pk, op = self.target_keys[target_idx]
                 uph = self.problem.uph_of(pk, op, model)
                 self.bucket_free[bucket_idx] -= 1
-                marginal = min(self.target_shortfall[target_idx], uph)
-                self.target_shortfall[target_idx] = max(0.0, self.target_shortfall[target_idx] - uph)
+                # marginal contribution is bounded by remaining plan AND remaining WIP.
+                wip_left = float(self.target_wip[target_idx])
+                effective_uph = min(uph, wip_left)
+                marginal = min(self.target_shortfall[target_idx], effective_uph)
+                self.target_shortfall[target_idx] = max(0.0, self.target_shortfall[target_idx] - effective_uph)
+                if wip_left != float("inf"):
+                    self.target_wip[target_idx] = max(0.0, wip_left - uph)
                 plan = max(1.0, float(self.target_plan[target_idx]))
                 reward += self.achievement_weight * (marginal / plan) / max(1, len(self.target_keys))
                 # log allocation

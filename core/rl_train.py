@@ -36,8 +36,14 @@ def _teacher_rollout(env: DispatchEnv) -> Tuple[List[np.ndarray], List[int]]:
             if env.bucket_free[i] <= 0:
                 continue
             for j in range(len(env.target_keys)):
-                if env.avail_matrix[i, j] <= 0.0 or env.target_shortfall[j] <= 0:
+                if (
+                    env.avail_matrix[i, j] <= 0.0
+                    or env.target_shortfall[j] <= 0
+                    or env.target_wip[j] <= 0
+                ):
                     continue
+                # marginal score == min(uph, shortfall, wip) scaled by uph_matrix
+                # which is already uph/plan_scale.
                 score = float(env.uph_matrix[i, j])
                 if score > best_score:
                     best_score = score

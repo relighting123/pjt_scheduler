@@ -86,6 +86,9 @@ def optimal_allocate(problem: SchedulingProblem, max_units_per_bucket: int = 20)
             total = 0.0
             for key, plan_qty in plan_by_pko.items():
                 actual = produced.get(key, 0.0)
+                wip = problem.wip_of(*key)
+                if wip > 0:
+                    actual = min(actual, wip)
                 total += min(1.0, actual / plan_qty) if plan_qty > 0 else 1.0
             avg = total / len(plan_by_pko) if plan_by_pko else 0.0
             if avg > best_score:
