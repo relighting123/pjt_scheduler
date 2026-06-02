@@ -24,18 +24,20 @@ def _schedule_to_actions(
 ) -> List[int]:
     """Convert a per-slot optimal schedule into the env's substep actions.
 
-    For each slot: emit one substep action per unit, then a NO-OP to commit.
-    Bucket index is the slot of (batch, model) in env.bucket_keys; target index
-    is the slot of (plan_prod_key, oper_id) in env.target_keys.
+    The env auto-commits as soon as a slot's bucket pool drains, so we only
+    emit an explicit NO-OP when the slot's allocation leaves some units idle.
+    Otherwise consecutive substeps would spill across the slot boundary.
     """
     actions: List[int] = []
+    total_pool = int(env._bucket_initial.sum())
+    no_op = 0 * (env.MAX_TARGETS + 1) + env.MAX_TARGETS
     for alloc in schedule:
+        units_in_slot = 0
         for a in alloc.allocations:
             try:
                 target_idx = env.target_keys.index((a.plan_prod_key, a.oper_id))
             except ValueError:
                 continue
-            # find a bucket whose (batch, model) matches; otherwise any same-model
             bucket_idx = -1
             for i, (b_id, model) in enumerate(env.bucket_keys):
                 if model == a.eqp_model_cd:
@@ -43,11 +45,13 @@ def _schedule_to_actions(
                     break
             if bucket_idx < 0:
                 continue
-            # one action per unit
             for _ in range(int(a.eqp_qty)):
                 actions.append(bucket_idx * (env.MAX_TARGETS + 1) + target_idx)
-        # commit slot
-        actions.append(0 * (env.MAX_TARGETS + 1) + env.MAX_TARGETS)
+                units_in_slot += 1
+        # Only force a NO-OP commit when the slot's allocation under-fills the
+        # pool; otherwise the last substep auto-commits.
+        if units_in_slot < total_pool:
+            actions.append(no_op)
     return actions
 
 
