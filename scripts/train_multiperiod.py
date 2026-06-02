@@ -90,7 +90,10 @@ def main() -> int:
         dyn = sim.run(dynamic_greedy_policy)
         opt = multiperiod_optimal(problem, num_slots, slot_hours, switch_time)
 
-        # Imitation warm-start (teacher: multiperiod_optimal) + PPO.
+        # Imitation warm-start (teacher: multiperiod_optimal) + PPO. The build-
+        # ahead / thrashing problems are tiny (≤4 training pairs), so cross-
+        # entropy needs many more epochs than a typical 30-50 to fully separate
+        # the action logits before PPO refines.
         save_path = train_multiperiod(
             problems=[problem],
             num_slots=num_slots,
@@ -98,13 +101,13 @@ def main() -> int:
             switch_time_hours=switch_time,
             artifact_dir="artifacts/models",
             policy_name=f"ppo_mp_{name.split()[0]}",
-            imitation_epochs=80,
-            ppo_total_steps=80000,
-            ppo_n_steps=256,
-            ppo_batch_size=64,
-            ppo_learning_rate=3e-4,
+            imitation_epochs=300,
+            ppo_total_steps=20000,
+            ppo_n_steps=128,
+            ppo_batch_size=32,
+            ppo_learning_rate=1e-4,
             ppo_gamma=0.99,
-            ppo_ent_coef=0.01,
+            ppo_ent_coef=0.001,
             seed=7,
         )
         model = PPO.load(save_path)
