@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -18,15 +18,17 @@ from .heuristic import greedy_allocate
 from .rl_env import DispatchEnv
 
 
-def _teacher_action_sequence(env: DispatchEnv) -> List[int]:
-    """Replay the greedy heuristic as a sequence of env actions."""
-    obs, _ = env.reset()
-    actions: List[int] = []
-    problem = env.problem
-    if problem is None:
-        return actions
+def _teacher_rollout(env: DispatchEnv) -> Tuple[List[np.ndarray], List[int]]:
+    """Roll the greedy teacher once and return (observations, actions) pairs.
 
-    # iterate: pick the (bucket, target) with the highest available UPH
+    Assumes the env is already reset to a problem by the caller.
+    """
+    obs_list: List[np.ndarray] = []
+    act_list: List[int] = []
+    if env.problem is None:
+        return obs_list, act_list
+
+    cur_obs = env._observation()
     while True:
         best = None
         best_score = -1.0
@@ -41,17 +43,19 @@ def _teacher_action_sequence(env: DispatchEnv) -> List[int]:
                     best_score = score
                     best = (i, j)
         if best is None:
-            # NO-OP terminates
-            actions.append(0 * (env.MAX_TARGETS + 1) + env.MAX_TARGETS)
-            env.step(actions[-1])
+            action = 0 * (env.MAX_TARGETS + 1) + env.MAX_TARGETS
+            obs_list.append(cur_obs.copy())
+            act_list.append(action)
+            env.step(action)
             break
         i, j = best
         action = i * (env.MAX_TARGETS + 1) + j
-        actions.append(action)
-        _, _, terminated, _, _ = env.step(action)
+        obs_list.append(cur_obs.copy())
+        act_list.append(action)
+        cur_obs, _, terminated, _, _ = env.step(action)
         if terminated:
             break
-    return actions
+    return obs_list, act_list
 
 
 def train(
@@ -103,18 +107,12 @@ def train(
     teacher_env = make_env()
     obs_dataset: List[np.ndarray] = []
     act_dataset: List[int] = []
-    for _ in range(imitation_epochs):
-        obs, _ = teacher_env.reset()
-        actions = _teacher_action_sequence(teacher_env)
-        # rebuild obs/action pairs by replaying
-        teacher_env.reset()
-        cur_obs, _ = teacher_env.reset()
-        for a in actions:
-            obs_dataset.append(cur_obs.copy())
-            act_dataset.append(int(a))
-            cur_obs, _, terminated, _, _ = teacher_env.step(a)
-            if terminated:
-                break
+    # iterate over each training problem deterministically so coverage is full
+    for problem in problems:
+        teacher_env._load_problem(problem)
+        obs_seq, act_seq = _teacher_rollout(teacher_env)
+        obs_dataset.extend(obs_seq)
+        act_dataset.extend(act_seq)
 
     if obs_dataset:
         obs_tensor = torch.as_tensor(np.array(obs_dataset), dtype=torch.float32)
@@ -122,7 +120,7 @@ def train(
         optimizer = torch.optim.Adam(model.policy.parameters(), lr=1e-3)
         loss_fn = torch.nn.CrossEntropyLoss()
         model.policy.train()
-        for _ in range(5):
+        for _ in range(max(1, int(imitation_epochs))):
             dist = model.policy.get_distribution(obs_tensor)
             logits = dist.distribution.logits
             loss = loss_fn(logits, act_tensor)
