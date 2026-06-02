@@ -2,7 +2,7 @@
 
 [1] 프로젝트 구성
 1. core 폴더가 잇으며 아래에는 db 연결,조회,저장 등 기능/객체 구조시물레이터 , 강화학습 엔진 등 공용 컴포넌트들이 있어.
-2. biz영역을 core를 활용한 구체화 부분이야. 정의된 스키마 기반으로 실제 데이터를 가져와 할당하고 이를 시물레이터에 매핑하는 거야. 이 부분은 거의 소스들은 그저 가져와 쓰는 영역으로 제한하는 거야. 이런 방향으로 프로젝트 구성이 필요해
+2. biz영역을 core를 활용한 구체화 부분이야. 정의된 스키마 기반으로 실제 데이터를 가져와 데이터 클래스로 정의해서 이를 core 시물레이터에 매핑하여 구동까지 하는거야.  이런 방향으로 프로젝트 구성이 필요해
 
 [2] 강화학습 모델링
 주어진 plan prod key/OPER별 계획량에 대해 장비배치를 수행하여 전체 평균 달성율을 높이는 데 그 목적이 있다.
@@ -49,7 +49,9 @@ RULE_TIMEKEY | FROM_BATCH | FROM_PLAN_PROD_KEY | FROM_OPER_ID | EQP_MODEL_CD | T
 2026051723020000 형태가 Rule TImekey이고 현재 수행시간을 의미한다. 테이블 명은 RTD_CONV_INF / RTD_CONV_HIS 이고 삭제후 insert하게 된다.
 start time은 rule timekey과 동일 시점이 된다.
 
-
+[5] 장비 Tool 전환 범위
+Tool 전환에 대해 점진적 적용을 위해 특정 batch id 별 그루핑.정의하며 해당 그룹 내에서만 전환하게 한다.
+가령 G001 : [9C/92,9C/102] 라면 tool 전환은 9c/92와 9C/102 끼리만 가능하며 나머지는 Tool 전환은 없다 단 batch id가 동일하다면 세부 Plan prod key와 oper 간 전환은 자유롭다
 
 [6] 배경지식
  batch id가 달라지는 경우는 tool 교체가 일어나며 to batch id의 tool은 소진하고 from batch id의 tool은 반환한다. 동일 BATCH_ID 내 PLAN PROD KEY가 변경되는 부분에 대해서는 시간 소요 및 TOOL 교체는 없다.
@@ -64,6 +66,7 @@ start time은 rule timekey과 동일 시점이 된다.
   또한 메인페이지에는 각 벤치마크별 최적해와 추론 결과 기반으로 평균 계획달성률 및 장비전환 횟수를 제시한다. 이를 html로 제공한다. 그래서 최적 정답과 추론 정답 간 정답 비교를 한다.
 - 벤치마크 입력: CSV 7종 + `ground_truth.json` (`python test_benchmark.py`로 DB 없이 검증).
 - 벤치 마크 데이터는 무조건 최적 정답을 이미 알고 있는 문제로 만들어야 하며 7개 정도 벤치마크 데이터가 필요하다.
+문제의 경우 특정 공정에만 장비가 몰려서 전환을 해야 최종 공정 달성이 가능한 경우 등으로 다양한 문제가 뭐야
 **추론**
 - `rule_timekey`: 조회 스냅샷·RTD_CONV 등 **결과 출력 키 동일**. 미지정·N/A 시 `MAX(RULE_TIMEKEY)` (WIP_INFO).
 
