@@ -1,194 +1,101 @@
-"""Scheduling simulator: conversions, production, plan achievement."""
+"""Scheduling simulator.
 
+Given a `SchedulingProblem` and an `AllocationSet`, compute production per
+(plan_prod_key, oper_id) and the achievement rate vs. plan. The output is the
+canonical reward signal for RL and the evaluation metric for benchmarks.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Dict, List, Tuple
 
-from core.domain import ConversionRecord, SchedulingDataset
-
-
-@dataclass
-class AllocationState:
-    """Current equipment allocation: model -> batch_id -> qty."""
-
-    allocation: dict[str, dict[str, int]] = field(default_factory=dict)
-
-    def qty_on_batch(self, model: str, batch_id: str) -> int:
-        return self.allocation.get(model, {}).get(batch_id, 0)
-
-    def total_for_model(self, model: str) -> int:
-        return sum(self.allocation.get(model, {}).values())
-
-    def move(self, model: str, from_batch: str, to_batch: str, qty: int) -> int:
-        """Move up to qty units; returns actual moved (never creates equipment)."""
-        if qty <= 0 or from_batch == to_batch:
-            return 0
-        available = self.qty_on_batch(model, from_batch)
-        qty = min(qty, available)
-        if qty <= 0:
-            return 0
-        self.allocation.setdefault(model, {})
-        self.allocation[model][from_batch] = available - qty
-        self.allocation[model][to_batch] = self.qty_on_batch(model, to_batch) + qty
-        if self.allocation[model].get(from_batch, 0) == 0:
-            self.allocation[model].pop(from_batch, None)
-        return qty
+from .domain import AllocationSet, SchedulingProblem
 
 
 @dataclass
 class SimulationResult:
-    avg_achievement_rate: float
-    achievement_by_oper: dict[tuple[str, str], float]
-    achievement_by_model: dict[str, float]
-    conversion_count: int
-    produced_by_oper: dict[tuple[str, str], float]
-    plan_by_oper: dict[tuple[str, str], float]
+    produced_by_pko: Dict[Tuple[str, str], float] = field(default_factory=dict)
+    plan_by_pko: Dict[Tuple[str, str], float] = field(default_factory=dict)
+    achievement_by_pko: Dict[Tuple[str, str], float] = field(default_factory=dict)
+    avg_achievement: float = 0.0
+    over_allocations: List[str] = field(default_factory=list)
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"avg_achievement={self.avg_achievement:.4f}, items={len(self.achievement_by_pko)}"
 
 
-class SchedulingSimulator:
-    """Simulate hourly production and tool-change rules from conversion schedule."""
+class Simulator:
+    """Horizon-agnostic single-step production simulator.
 
-    HOURS_PER_STEP = 1
+    The plan covers a fixed horizon (per RULE_TIMEKEY). UPH is per hour and the
+    horizon is normalized to 1.0 — benchmarks express PLAN_QTY in the same unit
+    so the comparison is consistent. Sub-hour horizons can be reflected by
+    scaling PLAN_QTY in biz layer.
+    """
 
-    def __init__(self, dataset: SchedulingDataset):
-        self.dataset = dataset
-        self._batch_to_opers: dict[str, list[tuple[str, str]]] = {}
-        for bo in dataset.batch_opers:
-            self._batch_to_opers.setdefault(bo.batch_id, []).append((bo.plan_prod_key, bo.oper_id))
+    def __init__(self, problem: SchedulingProblem, horizon_hours: float = 1.0) -> None:
+        self.problem = problem
+        self.horizon_hours = float(horizon_hours)
 
-    def _hours_in_horizon(self) -> int:
-        if not self.dataset.plan_slots:
-            return 24
-        times: list[int] = []
-        for slot in self.dataset.plan_slots:
-            times.append(int(slot.start_time[:10]))
-            times.append(int(slot.end_time[:10]))
-        if not times:
-            return 24
-        span = max(times) - min(times)
-        return max(1, min(168, span + 1))
+    def simulate(self, allocations: AllocationSet) -> SimulationResult:
+        problem = self.problem
+        result = SimulationResult()
+        result.plan_by_pko = {(pk, op): qty for pk, op, qty in problem.plan_targets()}
 
-    def _plan_qty_in_hour(
-        self, plan_prod_key: str, oper_id: str, hour_idx: int, horizon_start: int
-    ) -> float:
-        hour_key = horizon_start + hour_idx
+        # validate equipment pool isn't overcommitted per (batch, model)
+        pool = problem.equipment_pool()
+        used: Dict[Tuple[str, str], int] = {}
+        for alloc in allocations.allocations:
+            key = (alloc.batch_id, alloc.eqp_model_cd)
+            used[key] = used.get(key, 0) + max(0, int(alloc.eqp_qty))
+        for key, qty in used.items():
+            if qty > pool.get(key, 0):
+                result.over_allocations.append(f"over-alloc {key}: {qty} > {pool.get(key, 0)}")
+
+        # production = sum(eqp_qty * uph * horizon) limited by remaining plan
+        produced: Dict[Tuple[str, str], float] = {}
+        for alloc in allocations.allocations:
+            if not problem.is_available(alloc.plan_prod_key, alloc.oper_id, alloc.eqp_model_cd):
+                continue
+            uph = problem.uph_of(alloc.plan_prod_key, alloc.oper_id, alloc.eqp_model_cd)
+            qty = uph * max(0, int(alloc.eqp_qty)) * self.horizon_hours
+            pk_op = (alloc.plan_prod_key, alloc.oper_id)
+            produced[pk_op] = produced.get(pk_op, 0.0) + qty
+
+        # achievement capped at 1.0; missing keys count as 0 achievement
         total = 0.0
-        for slot in self.dataset.plan_slots:
-            if slot.plan_prod_key != plan_prod_key or slot.oper_id != oper_id:
-                continue
-            start = int(slot.start_time[:10])
-            end = int(slot.end_time[:10])
-            if start <= hour_key < end:
-                slot_hours = max(1, end - start)
-                total += slot.plan_qty / slot_hours
-        return total
-
-    def find_donor_batch(
-        self, state: AllocationState, eqp_model_cd: str, exclude_batch: str
-    ) -> str | None:
-        batches = state.allocation.get(eqp_model_cd, {})
-        donors = [(b, q) for b, q in batches.items() if b != exclude_batch and q > 0]
-        if not donors:
-            return None
-        return max(donors, key=lambda x: x[1])[0]
-
-    def _resolve_from_batch(
-        self, state: AllocationState, conv: ConversionRecord
-    ) -> tuple[str, int]:
-        model = conv.eqp_model_cd
-        to_batch = conv.to_batch_id
-        qty = conv.eqp_qty
-        from_batch = (conv.from_batch or "").strip()
-        if from_batch and from_batch != to_batch:
-            available = state.qty_on_batch(model, from_batch)
-            return from_batch, min(qty, available)
-        donor = self.find_donor_batch(state, model, to_batch)
-        if not donor:
-            return "", 0
-        available = state.qty_on_batch(model, donor)
-        return donor, min(qty, available)
-
-    def apply_conversions(
-        self,
-        conversions: list[ConversionRecord],
-        initial_state: AllocationState | None = None,
-    ) -> AllocationState:
-        state = initial_state or self._initial_state()
-        for conv in conversions:
-            from_batch, qty = self._resolve_from_batch(state, conv)
-            if qty <= 0 or not from_batch:
-                continue
-            state.move(conv.eqp_model_cd, from_batch, conv.to_batch_id, qty)
-        return state
-
-    def _initial_state(self) -> AllocationState:
-        state = AllocationState()
-        for eqp in self.dataset.eqp_counts:
-            state.allocation.setdefault(eqp.eqp_model_cd, {})
-            state.allocation[eqp.eqp_model_cd][eqp.batch_id] = (
-                state.qty_on_batch(eqp.eqp_model_cd, eqp.batch_id) + eqp.eqp_qty
-            )
-        return state
-
-    def simulate(self, conversions: list[ConversionRecord]) -> SimulationResult:
-        state = self.apply_conversions(conversions)
-        horizon_start = int(self.dataset.rule_timekey[:10]) if len(self.dataset.rule_timekey) >= 10 else 0
-        hours = self._hours_in_horizon()
-        plan_totals = self.dataset.plan_qty_by_oper()
-        produced: dict[tuple[str, str], float] = {k: 0.0 for k in plan_totals}
-        model_produced: dict[str, float] = {}
-
-        for hour_idx in range(hours):
-            for model, batches in state.allocation.items():
-                for batch_id, qty in batches.items():
-                    if qty <= 0:
-                        continue
-                    opers = self._batch_to_opers.get(batch_id, [])
-                    if not opers:
-                        continue
-                    share = qty / len(opers)
-                    for plan_prod_key, oper_id in opers:
-                        if not self.dataset.is_available(plan_prod_key, oper_id, model):
-                            continue
-                        uph = self.dataset.uph(plan_prod_key, oper_id, model)
-                        if uph is None:
-                            continue
-                        output = uph * share * self.HOURS_PER_STEP
-                        key = (plan_prod_key, oper_id)
-                        produced[key] = produced.get(key, 0.0) + output
-                        model_produced[model] = model_produced.get(model, 0.0) + output
-
-        achievement_by_oper: dict[tuple[str, str], float] = {}
-        for key, plan_qty in plan_totals.items():
+        counted = 0
+        for pk_op, plan_qty in result.plan_by_pko.items():
+            actual = produced.get(pk_op, 0.0)
             if plan_qty <= 0:
-                achievement_by_oper[key] = 1.0
+                rate = 1.0 if actual >= 0 else 0.0
             else:
-                achievement_by_oper[key] = min(1.0, produced.get(key, 0.0) / plan_qty)
+                rate = min(1.0, actual / plan_qty)
+            result.produced_by_pko[pk_op] = actual
+            result.achievement_by_pko[pk_op] = rate
+            total += rate
+            counted += 1
+        result.avg_achievement = (total / counted) if counted else 0.0
+        return result
 
-        rates = list(achievement_by_oper.values()) or [0.0]
-        avg_rate = sum(rates) / len(rates)
 
-        achievement_by_model: dict[str, float] = {}
-        total_plan = sum(plan_totals.values()) or 1.0
-        for model, out in model_produced.items():
-            achievement_by_model[model] = min(1.0, out / total_plan)
+def count_switches(previous: AllocationSet | None, current: AllocationSet) -> int:
+    """Count tool conversions vs. previous allocation.
 
-        tool_changes = self._count_tool_changes(conversions)
-
-        return SimulationResult(
-            avg_achievement_rate=avg_rate,
-            achievement_by_oper=achievement_by_oper,
-            achievement_by_model=achievement_by_model,
-            conversion_count=tool_changes,
-            produced_by_oper=produced,
-            plan_by_oper=plan_totals,
-        )
-
-    def _count_tool_changes(self, conversions: list[ConversionRecord]) -> int:
-        changes = 0
-        for conv in conversions:
-            from_batch = conv.from_batch or ""
-            to_batch = conv.to_batch_id or ""
-            if from_batch and to_batch and from_batch != to_batch:
-                changes += 1
-        return changes
+    A switch is a (batch, model) pair whose equipment count increased compared
+    to the previous snapshot — i.e. equipment moved into this batch.
+    """
+    if previous is None:
+        return 0
+    prev_by_bm: Dict[Tuple[str, str], int] = {}
+    for a in previous.allocations:
+        prev_by_bm[(a.batch_id, a.eqp_model_cd)] = prev_by_bm.get((a.batch_id, a.eqp_model_cd), 0) + a.eqp_qty
+    cur_by_bm: Dict[Tuple[str, str], int] = {}
+    for a in current.allocations:
+        cur_by_bm[(a.batch_id, a.eqp_model_cd)] = cur_by_bm.get((a.batch_id, a.eqp_model_cd), 0) + a.eqp_qty
+    switches = 0
+    for key, qty in cur_by_bm.items():
+        diff = qty - prev_by_bm.get(key, 0)
+        if diff > 0:
+            switches += diff
+    return switches

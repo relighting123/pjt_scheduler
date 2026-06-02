@@ -1,174 +1,228 @@
-#!/usr/bin/env python3
-"""Generate 7 non-trivial benchmarks: shared fleet, skewed initial allocation, tight plans."""
+"""Generate 7 benchmark datasets with known optimal answers.
 
+Each dataset is a directory containing:
+  wip_info.csv, uph.csv, equipment.csv, availability.csv,
+  tool_group.csv, tool_qty.csv, plan.csv, tool_groups.json, ground_truth.json
+
+Run:
+  python scripts/generate_benchmarks.py
+"""
 from __future__ import annotations
 
+import csv
 import json
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Dict, List, Tuple
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import pandas as pd
-
-from core.domain import SchedulingDataset
-from core.optimizer import ImprovedGreedySolver, ReferenceAllocationSolver
-from core.simulator import SchedulingSimulator
+ROOT = Path(__file__).resolve().parents[1] / "benchmarks"
 
 
-def _hour_key(rtk: str, offset: int) -> str:
-    base = int(rtk[:10])
-    return str(base + offset)
+@dataclass
+class BenchmarkSpec:
+    name: str
+    description: str
+    rule_timekey: str
+    targets: List[Tuple[str, str, float]]  # (plan_prod_key, oper_id, plan_qty)
+    oper_seq: Dict[Tuple[str, str], int]
+    batch_map: Dict[Tuple[str, str], str]  # (pk, op) -> batch_id
+    equipment: List[Tuple[str, str, int]]  # (batch_id, model, qty)
+    uph: Dict[Tuple[str, str, str], float]  # (pk, op, model) -> uph
+    tool_qty: List[Tuple[str, str, int]]
+    eqp_model_groups: Dict[str, List[str]] = field(default_factory=dict)
+    wip: Dict[Tuple[str, str], float] = field(default_factory=dict)
+    ground_truth_avg: float = 1.0  # filled by solver
 
 
-def _write_benchmark(
-    out_dir: Path,
-    rule_timekey: str,
-    products: list[tuple[str, str, str]],
-    models: list[str],
-    fleet: dict[str, int],
-    initial_on_batch: str,
-    plan_scale: float,
-    horizon_hours: int,
-) -> None:
-    """products: (batch_id, plan_prod_key, oper_id)."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([{"RULE_TIMEKEY": rule_timekey}]).to_csv(out_dir / "meta.csv", index=False)
+def _write_csv(path: Path, header: List[str], rows: List[list]) -> None:
+    with path.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        for r in rows:
+            w.writerow(r)
 
-    start = rule_timekey[:10]
-    end = _hour_key(rule_timekey, horizon_hours)
 
-    fleet_rows = [
-        {"RULE_TIMEKEY": rule_timekey, "EQP_MODEL_CD": m, "FLEET_QTY": q}
-        for m, q in fleet.items()
-    ]
-    pd.DataFrame(fleet_rows).to_csv(out_dir / "equipment_fleet.csv", index=False)
-
-    wip_rows, uph_rows, avail_rows, batch_rows, eqp_rows, tool_rows, plan_rows = [], [], [], [], [], [], []
-
-    for i, (batch_id, plan, oper) in enumerate(products):
-        wip_rows.append(
-            {
-                "RULE_TIMEKEY": rule_timekey,
-                "PLAN_PROD_KEY": plan,
-                "OPER_ID": oper,
-                "OPER_SEQ": i + 1,
-                "WIP_QTY": 500 + i * 100,
-            }
-        )
-        batch_rows.append(
-            {"RULE_TIMEKEY": rule_timekey, "BATCH_ID": batch_id, "PLAN_PROD_KEY": plan, "OPER_ID": oper}
-        )
-        for j, model in enumerate(models):
-            uph = 40 + j * 15 + i * 8
-            uph_rows.append(
-                {
-                    "RULE_TIMEKEY": rule_timekey,
-                    "PLAN_PROD_KEY": plan,
-                    "OPER_ID": oper,
-                    "EQP_MODEL_CD": model,
-                    "UPH": uph,
-                }
-            )
-            avail_rows.append(
-                {
-                    "RULE_TIMEKEY": rule_timekey,
-                    "PLAN_PROD_KEY": plan,
-                    "OPER_ID": oper,
-                    "EQP_MODEL_CD": model,
-                    "AVAIL_YN": "Y",
-                }
-            )
-            tool_rows.append(
-                {
-                    "RULE_TIMEKEY": rule_timekey,
-                    "BATCH_ID": batch_id,
-                    "EQP_MODEL_CD": model,
-                    "TOOL_QTY": 1,
-                }
-            )
-
-        best_uph = 40 + i * 8
-        plan_qty = plan_scale * (1.15 ** i)
-        plan_rows.append(
-            {
-                "RULE_TIMEKEY": rule_timekey,
-                "PLAN_PROD_KEY": plan,
-                "OPER_ID": oper,
-                "START_TIME": start,
-                "END_TIME": end,
-                "PLAN_QTY": round(plan_qty, 1),
-            }
-        )
-
-    for model, fleet_qty in fleet.items():
-        for batch_id, _, _ in products:
-            qty = fleet_qty if batch_id == initial_on_batch else 0
-            if qty > 0:
-                eqp_rows.append(
-                    {
-                        "RULE_TIMEKEY": rule_timekey,
-                        "BATCH_ID": batch_id,
-                        "EQP_MODEL_CD": model,
-                        "EQP_QTY": qty,
-                    }
-                )
-
-    pd.DataFrame(wip_rows).to_csv(out_dir / "oper_wip.csv", index=False)
-    pd.DataFrame(uph_rows).to_csv(out_dir / "model_uph.csv", index=False)
-    pd.DataFrame(avail_rows).to_csv(out_dir / "model_avail.csv", index=False)
-    pd.DataFrame(batch_rows).to_csv(out_dir / "batch_oper.csv", index=False)
-    pd.DataFrame(eqp_rows).to_csv(out_dir / "eqp_count.csv", index=False)
-    pd.DataFrame(tool_rows).to_csv(out_dir / "tool_qty.csv", index=False)
-    pd.DataFrame(plan_rows).to_csv(out_dir / "plan_slots.csv", index=False)
-
-    ds = SchedulingDataset.from_csv_dir(out_dir)
-    ref_solver = ReferenceAllocationSolver()
-    conversions = ref_solver.solve(ds)
-    sim = SchedulingSimulator(ds)
-    ref_result = sim.simulate(conversions)
-    naive = sim.simulate([])
-    heu = ImprovedGreedySolver().solve(ds)
-    heu_result = sim.simulate(heu)
-
-    payload = {
-        "RULE_TIMEKEY": rule_timekey,
-        "expected_avg_achievement": ref_result.avg_achievement_rate,
-        "naive_initial_achievement": naive.avg_achievement_rate,
-        "heuristic_achievement": heu_result.avg_achievement_rate,
-        "conversion_count": len(conversions),
-        "conversions": [c.to_row() for c in conversions],
-    }
-    (out_dir / "ground_truth.json").write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+def _solve_optimal(spec: BenchmarkSpec) -> float:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from core.domain import (
+        AvailabilityRecord, EquipmentRecord, PlanRecord, SchedulingProblem,
+        ToolGroupRecord, ToolQtyRecord, UphRecord, WipRecord,
     )
+    from core.optimizer import optimal_allocate
+    from core.simulator import Simulator
+
+    wip = [WipRecord(spec.rule_timekey, pk, op, spec.oper_seq.get((pk, op), 1), spec.wip.get((pk, op), 0.0))
+           for (pk, op, _) in spec.targets]
+    uph = [UphRecord(spec.rule_timekey, pk, op, m, v) for (pk, op, m), v in spec.uph.items()]
+    eqp = [EquipmentRecord(spec.rule_timekey, b, m, q) for (b, m, q) in spec.equipment]
+    avail = [AvailabilityRecord(spec.rule_timekey, pk, op, m, True) for (pk, op, m) in spec.uph]
+    tgrp = [ToolGroupRecord(spec.rule_timekey, b, pk, op) for (pk, op), b in spec.batch_map.items()]
+    tqty = [ToolQtyRecord(spec.rule_timekey, b, m, q) for (b, m, q) in spec.tool_qty]
+    plans = [PlanRecord(spec.rule_timekey, pk, op, spec.rule_timekey, spec.rule_timekey, qty)
+             for (pk, op, qty) in spec.targets]
+    problem = SchedulingProblem(
+        rule_timekey=spec.rule_timekey,
+        wip=wip, uph=uph, equipment=eqp, availability=avail,
+        tool_groups=tgrp, tool_qty=tqty, plans=plans,
+        eqp_model_groups=spec.eqp_model_groups,
+    )
+    alloc = optimal_allocate(problem)
+    sim = Simulator(problem).simulate(alloc)
+    return sim.avg_achievement
+
+
+def _write_dataset(spec: BenchmarkSpec) -> None:
+    d = ROOT / spec.name
+    d.mkdir(parents=True, exist_ok=True)
+
+    _write_csv(d / "wip_info.csv",
+               ["rule_timekey", "plan_prod_key", "oper_id", "oper_seq", "wip_qty"],
+               [[spec.rule_timekey, pk, op, spec.oper_seq.get((pk, op), 1), spec.wip.get((pk, op), 0.0)]
+                for (pk, op, _) in spec.targets])
+
+    _write_csv(d / "uph.csv",
+               ["rule_timekey", "plan_prod_key", "oper_id", "eqp_model_cd", "uph"],
+               [[spec.rule_timekey, pk, op, m, v] for (pk, op, m), v in spec.uph.items()])
+
+    _write_csv(d / "equipment.csv",
+               ["rule_timekey", "batch_id", "eqp_model_cd", "eqp_qty"],
+               [[spec.rule_timekey, b, m, q] for (b, m, q) in spec.equipment])
+
+    _write_csv(d / "availability.csv",
+               ["rule_timekey", "plan_prod_key", "oper_id", "eqp_model_cd", "avail_yn"],
+               [[spec.rule_timekey, pk, op, m, "Y"] for (pk, op, m) in spec.uph])
+
+    _write_csv(d / "tool_group.csv",
+               ["rule_timekey", "batch_id", "plan_prod_key", "oper_id"],
+               [[spec.rule_timekey, b, pk, op] for (pk, op), b in spec.batch_map.items()])
+
+    _write_csv(d / "tool_qty.csv",
+               ["rule_timekey", "batch_id", "eqp_model_cd", "tool_qty"],
+               [[spec.rule_timekey, b, m, q] for (b, m, q) in spec.tool_qty])
+
+    _write_csv(d / "plan.csv",
+               ["rule_timekey", "plan_prod_key", "oper_id", "start_time", "end_time", "plan_qty"],
+               [[spec.rule_timekey, pk, op, spec.rule_timekey, spec.rule_timekey, qty]
+                for (pk, op, qty) in spec.targets])
+
+    (d / "tool_groups.json").write_text(json.dumps(spec.eqp_model_groups, indent=2))
+
+    gt_avg = _solve_optimal(spec)
+    (d / "ground_truth.json").write_text(json.dumps({
+        "description": spec.description,
+        "avg_achievement": round(gt_avg, 6),
+    }, indent=2))
+
+
+def _specs() -> List[BenchmarkSpec]:
+    specs: List[BenchmarkSpec] = []
+
+    # 1) Balanced — one product, one op, plenty of equipment
+    specs.append(BenchmarkSpec(
+        name="benchmark_01",
+        description="Balanced single-target case — clearly solvable at 100%.",
+        rule_timekey="2026051707000001",
+        targets=[("P1", "OP10", 600.0)],
+        oper_seq={("P1", "OP10"): 1},
+        batch_map={("P1", "OP10"): "9C/92"},
+        equipment=[("9C/92", "T5833", 4)],
+        uph={("P1", "OP10", "T5833"): 200.0},
+        tool_qty=[("9C/92", "T5833", 4)],
+        eqp_model_groups={"G001": ["9C/92", "9C/102"]},
+    ))
+
+    # 2) Bottleneck — split equipment between two ops on the same batch
+    specs.append(BenchmarkSpec(
+        name="benchmark_02",
+        description="Split a model pool across two operations on the same batch.",
+        rule_timekey="2026051707000002",
+        targets=[("P1", "OP10", 400.0), ("P1", "OP20", 200.0)],
+        oper_seq={("P1", "OP10"): 1, ("P1", "OP20"): 2},
+        batch_map={("P1", "OP10"): "9C/92", ("P1", "OP20"): "9C/92"},
+        equipment=[("9C/92", "T5833", 3)],
+        uph={("P1", "OP10", "T5833"): 200.0, ("P1", "OP20", "T5833"): 200.0},
+        tool_qty=[("9C/92", "T5833", 3)],
+        eqp_model_groups={"G001": ["9C/92", "9C/102"]},
+    ))
+
+    # 3) Cross-batch conversion REQUIRED — tools in wrong batch
+    specs.append(BenchmarkSpec(
+        name="benchmark_03",
+        description="Equipment lives in batch G001 partner but is needed elsewhere; conversion required.",
+        rule_timekey="2026051707000003",
+        targets=[("P1", "OP10", 400.0)],
+        oper_seq={("P1", "OP10"): 1},
+        batch_map={("P1", "OP10"): "9C/92"},
+        equipment=[("9C/102", "T5833", 2), ("9C/92", "T5833", 0)],
+        uph={("P1", "OP10", "T5833"): 200.0},
+        tool_qty=[("9C/102", "T5833", 2), ("9C/92", "T5833", 0)],
+        eqp_model_groups={"G001": ["9C/92", "9C/102"]},
+    ))
+
+    # 4) Multi-model — pick the higher-UPH model
+    specs.append(BenchmarkSpec(
+        name="benchmark_04",
+        description="Pick the higher-UPH model among multiple options.",
+        rule_timekey="2026051707000004",
+        targets=[("P1", "OP10", 300.0)],
+        oper_seq={("P1", "OP10"): 1},
+        batch_map={("P1", "OP10"): "9C/92"},
+        equipment=[("9C/92", "T5833", 2), ("9C/92", "MAGNUM5", 2)],
+        uph={("P1", "OP10", "T5833"): 100.0, ("P1", "OP10", "MAGNUM5"): 150.0},
+        tool_qty=[("9C/92", "T5833", 2), ("9C/92", "MAGNUM5", 2)],
+        eqp_model_groups={"G001": ["9C/92"]},
+    ))
+
+    # 5) Multi-product competing for the same model — must split optimally
+    specs.append(BenchmarkSpec(
+        name="benchmark_05",
+        description="Two products on the same batch competing for the same model.",
+        rule_timekey="2026051707000005",
+        targets=[("P1", "OP10", 400.0), ("P2", "OP10", 400.0)],
+        oper_seq={("P1", "OP10"): 1, ("P2", "OP10"): 1},
+        batch_map={("P1", "OP10"): "9C/92", ("P2", "OP10"): "9C/92"},
+        equipment=[("9C/92", "T5833", 4)],
+        uph={("P1", "OP10", "T5833"): 200.0, ("P2", "OP10", "T5833"): 200.0},
+        tool_qty=[("9C/92", "T5833", 4)],
+        eqp_model_groups={"G001": ["9C/92", "9C/102"]},
+    ))
+
+    # 6) Asymmetric capability — only some equipment can run some products
+    specs.append(BenchmarkSpec(
+        name="benchmark_06",
+        description="Asymmetric capability: T5833 runs P1 only; MAGNUM5 runs P2 only.",
+        rule_timekey="2026051707000006",
+        targets=[("P1", "OP10", 200.0), ("P2", "OP10", 200.0)],
+        oper_seq={("P1", "OP10"): 1, ("P2", "OP10"): 1},
+        batch_map={("P1", "OP10"): "9C/92", ("P2", "OP10"): "9C/92"},
+        equipment=[("9C/92", "T5833", 2), ("9C/92", "MAGNUM5", 2)],
+        uph={("P1", "OP10", "T5833"): 100.0, ("P2", "OP10", "MAGNUM5"): 100.0},
+        tool_qty=[("9C/92", "T5833", 2), ("9C/92", "MAGNUM5", 2)],
+        eqp_model_groups={"G001": ["9C/92"]},
+    ))
+
+    # 7) Tight capacity — optimal is partial achievement; tests calibration
+    specs.append(BenchmarkSpec(
+        name="benchmark_07",
+        description="Capacity-limited: plan exceeds full UPH; partial achievement expected.",
+        rule_timekey="2026051707000007",
+        targets=[("P1", "OP10", 800.0), ("P1", "OP20", 800.0)],
+        oper_seq={("P1", "OP10"): 1, ("P1", "OP20"): 2},
+        batch_map={("P1", "OP10"): "9C/92", ("P1", "OP20"): "9C/92"},
+        equipment=[("9C/92", "T5833", 2)],
+        uph={("P1", "OP10", "T5833"): 200.0, ("P1", "OP20", "T5833"): 200.0},
+        tool_qty=[("9C/92", "T5833", 2)],
+        eqp_model_groups={"G001": ["9C/92", "9C/102"]},
+    ))
+    return specs
 
 
 def main() -> None:
-    root = Path("benchmarks")
-    scenarios = [
-        # rtk, n_opers, models, fleet, wrong_batch, plan_scale, hours
-        ("2026051707000000", 2, ["M1", "M2"], {"M1": 4, "M2": 2}, "B1", 2200, 12),
-        ("2026051807000000", 2, ["M1", "M2", "M3"], {"M1": 3, "M2": 3, "M3": 2}, "B1", 2800, 12),
-        ("2026051907000000", 3, ["M1", "M2"], {"M1": 5, "M2": 3}, "B1", 2400, 16),
-        ("2026052007000000", 3, ["M1", "M2", "M3"], {"M1": 4, "M2": 3, "M3": 2}, "B1", 2600, 16),
-        ("2026052107000000", 2, ["T5833", "MAGNUM5"], {"T5833": 3, "MAGNUM5": 2}, "B1", 3200, 12),
-        ("2026052207000000", 4, ["M1", "M2"], {"M1": 6, "M2": 4}, "B1", 2000, 20),
-        ("2026052307000000", 4, ["M1", "M2", "M3"], {"M1": 5, "M2": 4, "M3": 3}, "B1", 2500, 20),
-    ]
-
-    for idx, (rtk, n_opers, models, fleet, wrong_b, scale, hours) in enumerate(scenarios, start=1):
-        products = [(f"B{i+1}", f"P{idx}/PROD{i+1}", f"OP{i+1:03d}") for i in range(n_opers)]
-        out = root / f"benchmark_{idx:02d}"
-        _write_benchmark(out, rtk, products, models, fleet, wrong_b, scale, hours)
-        ds = SchedulingDataset.from_csv_dir(out)
-        sim = SchedulingSimulator(ds)
-        gt = json.loads((out / "ground_truth.json").read_text(encoding="utf-8"))
-        print(
-            f"benchmark_{idx:02d}: naive={gt['naive_initial_achievement']:.2%} "
-            f"ref={gt['expected_avg_achievement']:.2%} heu={gt['heuristic_achievement']:.2%} "
-            f"conversions={gt['conversion_count']}"
-        )
+    ROOT.mkdir(parents=True, exist_ok=True)
+    for spec in _specs():
+        _write_dataset(spec)
+        print(f"generated {spec.name}")
 
 
 if __name__ == "__main__":
