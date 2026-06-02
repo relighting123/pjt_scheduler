@@ -215,6 +215,70 @@ def _specs() -> List[BenchmarkSpec]:
         tool_qty=[("9C/92", "T5833", 2)],
         eqp_model_groups={"G001": ["9C/92", "9C/102"]},
     ))
+
+    # --- greedy-fail cases (RL must learn to avoid local-optimum traps) ---
+
+    # 8) Specialist mismatch — greedy gives the fast generalist to product 1
+    #    because the marginal is highest there; optimal sends the generalist
+    #    to product 2 (only tool that can run it) and the specialist to P1.
+    specs.append(BenchmarkSpec(
+        name="benchmark_08",
+        description="Greedy trap: versatile tool wasted on wrong target. Greedy 0.5, optimal 1.0.",
+        rule_timekey="2026051707000008",
+        targets=[("P1", "OP10", 100.0), ("P2", "OP10", 100.0)],
+        oper_seq={("P1", "OP10"): 1, ("P2", "OP10"): 1},
+        batch_map={("P1", "OP10"): "9C/92", ("P2", "OP10"): "9C/92"},
+        equipment=[("9C/92", "T_FAST", 1), ("9C/92", "T_SLOW", 1)],
+        uph={
+            ("P1", "OP10", "T_FAST"): 300.0,
+            ("P2", "OP10", "T_FAST"): 100.0,
+            ("P1", "OP10", "T_SLOW"): 100.0,
+        },
+        tool_qty=[("9C/92", "T_FAST", 1), ("9C/92", "T_SLOW", 1)],
+        eqp_model_groups={"G001": ["9C/92"]},
+    ))
+
+    # 9) Multi-op frontloading — greedy fills the upstream OP with the
+    #    generalist; the specialist that can only run OP10 then has no work
+    #    and OP20 is empty. Optimal swaps the assignments.
+    specs.append(BenchmarkSpec(
+        name="benchmark_09",
+        description="Multi-op frontloading trap. Greedy 0.5, optimal 1.0.",
+        rule_timekey="2026051707000009",
+        targets=[("P1", "OP10", 200.0), ("P1", "OP20", 200.0)],
+        oper_seq={("P1", "OP10"): 1, ("P1", "OP20"): 2},
+        batch_map={("P1", "OP10"): "9C/92", ("P1", "OP20"): "9C/92"},
+        equipment=[("9C/92", "T_GP", 1), ("9C/92", "T_OP10", 1)],
+        uph={
+            ("P1", "OP10", "T_GP"): 200.0,
+            ("P1", "OP20", "T_GP"): 200.0,
+            ("P1", "OP10", "T_OP10"): 200.0,
+        },
+        tool_qty=[("9C/92", "T_GP", 1), ("9C/92", "T_OP10", 1)],
+        eqp_model_groups={"G001": ["9C/92"]},
+    ))
+
+    # 10) Downstream bottleneck — 3 ops, GP tool can run all but specialists
+    #     only cover OP10 and OP20. Greedy uses the GP tool for OP10 (because
+    #     it iterates targets in order) and leaves OP30 empty.
+    specs.append(BenchmarkSpec(
+        name="benchmark_10",
+        description="3-op line; GP tool must go to terminal OP. Greedy 0.667, optimal 1.0.",
+        rule_timekey="2026051707000010",
+        targets=[("P1", "OP10", 100.0), ("P1", "OP20", 100.0), ("P1", "OP30", 100.0)],
+        oper_seq={("P1", "OP10"): 1, ("P1", "OP20"): 2, ("P1", "OP30"): 3},
+        batch_map={("P1", "OP10"): "9C/92", ("P1", "OP20"): "9C/92", ("P1", "OP30"): "9C/92"},
+        equipment=[("9C/92", "T_GP", 1), ("9C/92", "T_OP10", 1), ("9C/92", "T_OP20", 1)],
+        uph={
+            ("P1", "OP10", "T_GP"): 100.0,
+            ("P1", "OP20", "T_GP"): 100.0,
+            ("P1", "OP30", "T_GP"): 100.0,
+            ("P1", "OP10", "T_OP10"): 100.0,
+            ("P1", "OP20", "T_OP20"): 100.0,
+        },
+        tool_qty=[("9C/92", "T_GP", 1), ("9C/92", "T_OP10", 1), ("9C/92", "T_OP20", 1)],
+        eqp_model_groups={"G001": ["9C/92"]},
+    ))
     return specs
 
 
