@@ -96,11 +96,14 @@ def train_multiperiod(
     imitation_loss_target: float = 0.05,
 ) -> str:
     try:
-        from stable_baselines3 import PPO
+        from sb3_contrib import MaskablePPO
+        from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
         from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
         import torch
     except Exception as exc:  # pragma: no cover
-        raise RuntimeError("stable-baselines3 is required; install pjt_scheduler[rl].") from exc
+        raise RuntimeError(
+            "stable-baselines3 + sb3-contrib are required; install pjt_scheduler[rl]."
+        ) from exc
 
     Path(artifact_dir).mkdir(parents=True, exist_ok=True)
     save_path = str(Path(artifact_dir) / f"{policy_name}.zip")
@@ -120,8 +123,8 @@ def train_multiperiod(
     n = max(1, int(num_envs))
     vec = DummyVecEnv([make_env(0)]) if n == 1 else SubprocVecEnv([make_env(i) for i in range(n)])
 
-    model = PPO(
-        "MlpPolicy", vec,
+    model = MaskablePPO(
+        MaskableActorCriticPolicy, vec,
         learning_rate=ppo_learning_rate,
         n_steps=ppo_n_steps, batch_size=ppo_batch_size, gamma=ppo_gamma,
         ent_coef=ppo_ent_coef, device=device, seed=seed, verbose=0,

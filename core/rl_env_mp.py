@@ -291,3 +291,31 @@ class MultiPeriodDispatchEnv(gym.Env if gym is not None else object):
         if self._prev_alloc is not None:
             sched.append(self._prev_alloc)
         return sched
+
+    # ------------------------------------------------------------------
+    def action_masks(self) -> np.ndarray:
+        """Valid actions for sb3_contrib.MaskablePPO.
+
+        Substep is valid iff bucket has free units, the target is reachable
+        from this bucket, the target still has positive shortfall AND its WIP
+        queue is non-empty this slot (an empty queue produces nothing). NO-OP
+        (commit slot) is always valid.
+        """
+        mask = np.zeros(self.MAX_BUCKETS * (self.MAX_TARGETS + 1), dtype=bool)
+        n_buckets = len(self.bucket_keys)
+        n_targets = len(self.target_keys)
+        stride = self.MAX_TARGETS + 1
+        for i in range(n_buckets):
+            mask[i * stride + self.MAX_TARGETS] = True  # NO-OP always available
+            if self.bucket_free[i] <= 0:
+                continue
+            for j in range(n_targets):
+                if (
+                    self.avail_matrix[i, j] > 0.0
+                    and self.target_shortfall[j] > 0.0
+                    and self.target_wip[j] > 0.0
+                ):
+                    mask[i * stride + j] = True
+        if not mask.any():
+            mask[self.MAX_TARGETS] = True
+        return mask

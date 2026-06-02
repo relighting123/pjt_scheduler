@@ -90,11 +90,15 @@ def train(
       imitation_loss_target: stop CE early once batch loss drops below this.
     """
     try:
-        from stable_baselines3 import PPO
+        from sb3_contrib import MaskablePPO
+        from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
         from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
         import torch
     except Exception as exc:  # pragma: no cover
-        raise RuntimeError("stable-baselines3 is required for training; install pjt_scheduler[rl].") from exc
+        raise RuntimeError(
+            "stable-baselines3 + sb3-contrib are required for training; "
+            "install pjt_scheduler[rl] (and sb3-contrib)."
+        ) from exc
 
     Path(artifact_dir).mkdir(parents=True, exist_ok=True)
     save_path = str(Path(artifact_dir) / f"{policy_name}.zip")
@@ -116,8 +120,8 @@ def train(
     else:
         vec = SubprocVecEnv([make_env(i) for i in range(n)])
 
-    model = PPO(
-        "MlpPolicy",
+    model = MaskablePPO(
+        MaskableActorCriticPolicy,
         vec,
         learning_rate=ppo_learning_rate,
         n_steps=ppo_n_steps,
@@ -167,11 +171,11 @@ def train(
 
 
 def load_policy(model_path: str):
-    """Load a saved PPO policy. Returns None if SB3 isn't available."""
+    """Load a saved MaskablePPO policy. Returns None if dependencies missing."""
     try:
-        from stable_baselines3 import PPO
+        from sb3_contrib import MaskablePPO
     except Exception:
         return None
     if not os.path.exists(model_path):
         return None
-    return PPO.load(model_path)
+    return MaskablePPO.load(model_path)

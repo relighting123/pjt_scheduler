@@ -201,3 +201,32 @@ class DispatchEnv(gym.Env if gym is not None else object):
             rule_timekey=self.problem.rule_timekey if self.problem else "",
             allocations=list(self._allocations),
         )
+
+    # ------------------------------------------------------------------
+    def action_masks(self) -> np.ndarray:
+        """Return a boolean mask over the discrete action space.
+
+        Used by sb3_contrib.MaskablePPO so the policy never samples an action
+        whose (bucket, target) is unavailable / saturated. NO-OP always valid.
+        """
+        mask = np.zeros(self.MAX_BUCKETS * (self.MAX_TARGETS + 1), dtype=bool)
+        n_buckets = len(self.bucket_keys)
+        n_targets = len(self.target_keys)
+        stride = self.MAX_TARGETS + 1
+        for i in range(n_buckets):
+            if self.bucket_free[i] <= 0:
+                # Even the NO-OP for this bucket index stays valid as a commit
+                # signal; SB3 requires every state to have at least one True.
+                mask[i * stride + self.MAX_TARGETS] = True
+                continue
+            for j in range(n_targets):
+                if (
+                    self.avail_matrix[i, j] > 0.0
+                    and self.target_shortfall[j] > 0.0
+                ):
+                    mask[i * stride + j] = True
+            mask[i * stride + self.MAX_TARGETS] = True  # NO-OP
+        if not mask.any():
+            # SB3 requires non-empty mask; default to a NO-OP on bucket 0.
+            mask[self.MAX_TARGETS] = True
+        return mask

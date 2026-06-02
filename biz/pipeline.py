@@ -269,9 +269,9 @@ def _infer_dynamic_first_slot(problem, model_path, settings) -> AllocationSet:
 
     if model_path and Path(model_path).exists():
         try:
-            from stable_baselines3 import PPO
+            from sb3_contrib import MaskablePPO
             from core.rl_env_mp import MultiPeriodDispatchEnv
-            model = PPO.load(model_path)
+            model = MaskablePPO.load(model_path)
             env = MultiPeriodDispatchEnv(
                 [problem], num_slots=num_slots, slot_hours=slot_hours,
                 switch_time_hours=switch_time_hours, seed=0,
@@ -279,7 +279,8 @@ def _infer_dynamic_first_slot(problem, model_path, settings) -> AllocationSet:
             env._load_problem(problem)
             obs = env._observation()
             while env.slot_idx < 1:
-                action, _ = model.predict(obs, deterministic=True)
+                mask = env.action_masks()
+                action, _ = model.predict(obs, deterministic=True, action_masks=mask)
                 obs, _, term, trunc, _ = env.step(int(action))
                 if term or trunc:
                     break

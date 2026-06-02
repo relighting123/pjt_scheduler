@@ -39,7 +39,8 @@ def _replay_from_env(env: MultiPeriodDispatchEnv, model, problem: SchedulingProb
     done = False
     safety = env.MAX_BUCKETS * (env.MAX_TARGETS + 1) * env.num_slots
     while not done and safety > 0:
-        action, _ = model.predict(obs, deterministic=True)
+        mask = env.action_masks()
+        action, _ = model.predict(obs, deterministic=True, action_masks=mask)
         prev_slot = env.slot_idx
         obs, _, term, trunc, _ = env.step(int(action))
         # capture committed slot allocations as the slot advances
@@ -69,7 +70,7 @@ def _evaluate_schedule(problem, schedule, num_slots, slot_hours, switch_time_hou
 
 def main() -> int:
     try:
-        from stable_baselines3 import PPO
+        from sb3_contrib import MaskablePPO as PPO
         from stable_baselines3.common.vec_env import DummyVecEnv
     except Exception as exc:
         print(f"stable-baselines3 required: {exc}")

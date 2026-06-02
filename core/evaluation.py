@@ -150,7 +150,8 @@ def evaluate_all_benchmark_datasets_dynamic(
             # advance substeps until the slot index moves on or we hit a terminal
             target_slot = slot_idx + 1
             while env.slot_idx < target_slot:
-                action, _ = model.predict(env_ref["obs"], deterministic=True)
+                mask = env.action_masks()
+                action, _ = model.predict(env_ref["obs"], deterministic=True, action_masks=mask)
                 env_ref["obs"], _, term, trunc, _ = env.step(int(action))
                 if term or trunc:
                     break
@@ -170,8 +171,8 @@ def evaluate_all_benchmark_datasets_dynamic(
     rl_model = None
     if model_path and Path(model_path).exists():
         try:
-            from stable_baselines3 import PPO
-            rl_model = PPO.load(model_path)
+            from sb3_contrib import MaskablePPO
+            rl_model = MaskablePPO.load(model_path)
         except Exception:
             rl_model = None
 
