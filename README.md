@@ -153,9 +153,20 @@ pip install -e .[rl,oracle]
 현재 재공/잔여계획을 보고 재배치하며, 배치를 넘으면 전환으로 집계된다.
 
 ```bash
-python test_multiperiod.py   # DB 없이 build-ahead 시나리오 검증
+python test_multiperiod.py            # 두 시나리오 정책 비교 (DB 없음)
+python scripts/train_multiperiod.py   # 멀티 피리어드 RL 학습 + 평가
 ```
 
-- `static` (단일 배치 고정) 0.5  vs  `dynamic`(슬롯별 재배치) 1.0  vs  `optimal` 1.0
-- 정책: `static_policy`, `dynamic_greedy_policy`, 소규모 정확해 `multiperiod_optimal`.
+검증 시나리오 (`test_multiperiod.py`):
+- **build-ahead** (OP20 큐 비어있음): static 0.5, dynamic 1.0, optimal 1.0.
+  앞공정 OP10에서 재공 빌드 → 다음 슬롯 OP20 전환.
+- **thrashing** (4 제품, 2 배치 교차, switch_time=0.5h):
+  static 0.25, dynamic 0.625 (3 전환), optimal 0.875 (1 전환 — 배치 묶기 A A B B).
+
+멀티 피리어드 RL (`core/rl_env_mp.py` + `core/rl_train_mp.py`):
+- Gym 환경: substep마다 단위 1개 할당; 슬롯 풀이 비면 자동 commit + WIP 흐름 적용.
+- 학습: `multiperiod_optimal` teacher의 슬롯별 액션 시퀀스로 cross-entropy 모방학습.
+  현 시나리오에서 PPO build-ahead 1.0 / thrashing 0.875 — 두 시나리오 모두 optimal 달성.
+
+정책: `static_policy`, `dynamic_greedy_policy`, 소규모 정확해 `multiperiod_optimal`, 그리고 학습된 PPO.
 

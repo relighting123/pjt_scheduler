@@ -89,6 +89,7 @@ class MultiPeriodDispatchEnv(gym.Env if gym is not None else object):
         self.avail_matrix: np.ndarray = np.zeros((self.MAX_BUCKETS, self.MAX_TARGETS), dtype=np.float32)
         self.prev_bucket_target: np.ndarray = np.full(self.MAX_BUCKETS, -1, dtype=np.int32)
         self.slot_idx: int = 0
+        self._substeps_in_slot: int = 0
         self._this_slot_alloc: List[Allocation] = []
         self._prev_alloc: Optional[AllocationSet] = None
         self._cumulative: Dict[Tuple[str, str], float] = {}
@@ -208,6 +209,7 @@ class MultiPeriodDispatchEnv(gym.Env if gym is not None else object):
         self.slot_idx += 1
         self._prev_alloc = alloc
         self._this_slot_alloc = []
+        self._substeps_in_slot = 0
         self.bucket_free[:] = self._bucket_initial
         # refresh shortfall = plan - cumulative
         for j, key in enumerate(self.target_keys):
@@ -230,7 +232,10 @@ class MultiPeriodDispatchEnv(gym.Env if gym is not None else object):
         terminated = False
         info: Dict = {}
 
-        commit_now = is_noop or bucket_idx >= len(self.bucket_keys)
+        self._substeps_in_slot += 1
+        # safety: a slot may not loop forever on invalid actions
+        force_commit = self._substeps_in_slot > self.MAX_BUCKETS * 2
+        commit_now = is_noop or bucket_idx >= len(self.bucket_keys) or force_commit
         if not commit_now:
             target_idx = target_or_noop
             if (
