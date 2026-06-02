@@ -142,10 +142,49 @@ python run.py infer --benchmark-dataset benchmarks/benchmark_01 --output artifac
   앞공정→뒷공정 재공 흐름과 thrashing 회피까지 모델링.
   `config/settings.json`의 `dynamic.{num_slots, slot_hours, switch_time_hours}`로 튜닝.
 
+#### 모드별 명령
+
+**plan-only** — 재공 무시, 계획만:
 ```bash
+# 학습 (DB 구간)
+python run.py train --mode plan-only --from-timekey 20251020070000 --to-timekey 20251020120000 --steps 50000
+# 학습 (벤치마크)
+python run.py train --mode plan-only --benchmark-dataset benchmarks/benchmark_01 --steps 50000
+# 추론 (DB 최신 RULE_TIMEKEY)
+python run.py infer --mode plan-only
+# 추론 (특정 키 / 벤치마크)
+python run.py infer --mode plan-only --timekey 20251020070000
+python run.py infer --mode plan-only --benchmark-dataset benchmarks/benchmark_01 --output artifacts/inference/plan_only.csv
+# 평가
+python run.py eval  --mode plan-only
+```
+
+**wip-static** (기본) — 단일 스냅샷 + WIP cap:
+```bash
+python run.py train --mode wip-static --from-timekey 20251020070000 --to-timekey 20251020120000 --steps 50000
+python run.py train --mode wip-static --benchmark-dataset benchmarks/benchmark_01 --steps 50000
+python run.py infer --mode wip-static
+python run.py infer --mode wip-static --timekey 20251020070000
+python run.py infer --mode wip-static --benchmark-dataset benchmarks/benchmark_01 --output artifacts/inference/wip_static.csv
+python run.py eval  --mode wip-static
+# --mode 생략 시 wip-static이 기본
+python run.py eval
+```
+
+**dynamic** — 멀티 피리어드 WIP 흐름 + 전환 비용:
+```bash
+python run.py train --mode dynamic --from-timekey 20251020070000 --to-timekey 20251020120000
 python run.py train --mode dynamic --benchmark-dataset benchmarks/benchmark_11
-python run.py infer --mode dynamic --benchmark-dataset benchmarks/benchmark_11
-python run.py eval  --mode all      # 세 모드 동시 평가, 모드별 리포트 출력
+python run.py infer --mode dynamic
+python run.py infer --mode dynamic --timekey 20251020070000
+python run.py infer --mode dynamic --benchmark-dataset benchmarks/benchmark_11 --output artifacts/inference/dynamic.csv
+python run.py eval  --mode dynamic
+# 슬롯 수 / 슬롯 길이 / 전환 시간은 config/settings.json의 dynamic.* 키로 조정
+```
+
+**세 모드 동시 평가**:
+```bash
+python run.py eval --mode all   # plan-only + wip-static + dynamic 나란히, 모드별 HTML/MD 리포트 출력
 ```
 
 ### 학습 속도 옵션 (`config/settings.json` → `speed`)
