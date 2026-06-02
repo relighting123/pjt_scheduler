@@ -23,6 +23,7 @@ from core.flow import (  # noqa: E402
     static_policy,
 )
 from core.rl_env_mp import MultiPeriodDispatchEnv  # noqa: E402
+from core.rl_train_mp import train_multiperiod  # noqa: E402
 
 from test_multiperiod import (  # noqa: E402
     build_buildahead_problem,
@@ -89,7 +90,25 @@ def main() -> int:
         dyn = sim.run(dynamic_greedy_policy)
         opt = multiperiod_optimal(problem, num_slots, slot_hours, switch_time)
 
-        # Train PPO on this scenario.
+        # Imitation warm-start (teacher: multiperiod_optimal) + PPO.
+        save_path = train_multiperiod(
+            problems=[problem],
+            num_slots=num_slots,
+            slot_hours=slot_hours,
+            switch_time_hours=switch_time,
+            artifact_dir="artifacts/models",
+            policy_name=f"ppo_mp_{name.split()[0]}",
+            imitation_epochs=80,
+            ppo_total_steps=80000,
+            ppo_n_steps=256,
+            ppo_batch_size=64,
+            ppo_learning_rate=3e-4,
+            ppo_gamma=0.99,
+            ppo_ent_coef=0.01,
+            seed=7,
+        )
+        model = PPO.load(save_path)
+
         def make_env():
             return MultiPeriodDispatchEnv(
                 [problem],
@@ -98,15 +117,6 @@ def main() -> int:
                 switch_time_hours=switch_time,
                 seed=7,
             )
-
-        vec = DummyVecEnv([make_env])
-        model = PPO(
-            "MlpPolicy", vec,
-            learning_rate=5e-4,
-            n_steps=256, batch_size=64, gamma=0.99,
-            ent_coef=0.05, seed=7, verbose=0,
-        )
-        model.learn(total_timesteps=150000)
 
         eval_env = make_env()
         schedule = _replay_from_env(eval_env, model, problem)
