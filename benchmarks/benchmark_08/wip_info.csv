@@ -1,0 +1,3 @@
+rule_timekey,plan_prod_key,oper_id,oper_seq,wip_qty
+2026051707000008,P1,OP10,1,999999.0
+2026051707000008,P2,OP10,1,999999.0

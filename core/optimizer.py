@@ -33,7 +33,11 @@ def _compositions(n: int, k: int):
             yield (i,) + tail
 
 
-def optimal_allocate(problem: SchedulingProblem, max_units_per_bucket: int = 20) -> AllocationSet:
+def optimal_allocate(
+    problem: SchedulingProblem,
+    max_units_per_bucket: int = 20,
+    ignore_wip: bool = False,
+) -> AllocationSet:
     """Brute-force optimal allocation maximizing average achievement.
 
     Falls back to the greedy heuristic if a bucket exceeds `max_units_per_bucket`
@@ -60,7 +64,7 @@ def optimal_allocate(problem: SchedulingProblem, max_units_per_bucket: int = 20)
         if eligible:
             bucket_targets[bm] = eligible
         if free > max_units_per_bucket:
-            return greedy_allocate(problem)
+            return greedy_allocate(problem, ignore_wip=ignore_wip)
 
     # rough search-space guard
     space = 1
@@ -73,7 +77,7 @@ def optimal_allocate(problem: SchedulingProblem, max_units_per_bucket: int = 20)
             c = c * (free + k - 1 - i) // (i + 1)
         space *= max(1, c)
         if space > 2_000_000:
-            return greedy_allocate(problem)
+            return greedy_allocate(problem, ignore_wip=ignore_wip)
 
     best_score = -1.0
     best_assign: Dict[Tuple[str, str, int], int] = {}
@@ -86,6 +90,10 @@ def optimal_allocate(problem: SchedulingProblem, max_units_per_bucket: int = 20)
             total = 0.0
             for key, plan_qty in plan_by_pko.items():
                 actual = produced.get(key, 0.0)
+                if not ignore_wip:
+                    wip = problem.wip_of(*key)
+                    if wip > 0:
+                        actual = min(actual, wip)
                 total += min(1.0, actual / plan_qty) if plan_qty > 0 else 1.0
             avg = total / len(plan_by_pko) if plan_by_pko else 0.0
             if avg > best_score:

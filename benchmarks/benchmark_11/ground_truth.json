@@ -1,0 +1,4 @@
+{
+  "description": "WIP-limited downstream: OP20 has only 50 WIP. Optimal 0.625, not 1.0.",
+  "avg_achievement": 0.625
+}

@@ -122,14 +122,83 @@ ATTR_VAL : 각 항목별 GBN_CD에 해당하는 값
 ## Created Project Usage
 
 ```bash
-python run.py eval
+python run.py eval                                            # --mode wip-static (default)
+python run.py eval --mode all                                 # plan-only + wip-static + dynamic side-by-side
 python run.py train --benchmark-dataset benchmarks/benchmark_01 --steps 50000
 python run.py infer --benchmark-dataset benchmarks/benchmark_01 --output artifacts/inference/allocation.csv
 ```
 
+### 모델 모드 (`--mode`)
+
+세 가지 모델을 옵션으로 학습/추론한다 (모드별 모델 파일은 자동으로
+`ppo_dispatch_<mode>.zip` 으로 분리 저장):
+
+- **`plan-only`** — 재공을 무시하고 계획만으로 산출 (초기 phase-0 가정).
+  benchmark_11 같은 재공 부족 케이스를 비현실적으로 100%로 추정한다.
+- **`wip-static`** — 단일 스냅샷 + WIP 캡 (Phase 1, 기본). 재공이 부족한
+  공정의 산출을 큐 크기로 제한한다.
+- **`dynamic`** — 멀티 피리어드 WIP 흐름 + 전환 시간 비용 (Phase 2/3).
+  horizon을 `dynamic.num_slots` 슬롯으로 쪼개고 슬롯마다 재배치;
+  앞공정→뒷공정 재공 흐름과 thrashing 회피까지 모델링.
+  `config/settings.json`의 `dynamic.{num_slots, slot_hours, switch_time_hours}`로 튜닝.
+
+#### 모드별 명령
+
+**plan-only** — 재공 무시, 계획만:
+```bash
+# 학습 (DB 구간)
+python run.py train --mode plan-only --from-timekey 20251020070000 --to-timekey 20251020120000 --steps 50000
+# 학습 (벤치마크)
+python run.py train --mode plan-only --benchmark-dataset benchmarks/benchmark_01 --steps 50000
+# 추론 (DB 최신 RULE_TIMEKEY)
+python run.py infer --mode plan-only
+# 추론 (특정 키 / 벤치마크)
+python run.py infer --mode plan-only --timekey 20251020070000
+python run.py infer --mode plan-only --benchmark-dataset benchmarks/benchmark_01 --output artifacts/inference/plan_only.csv
+# 평가
+python run.py eval  --mode plan-only
+```
+
+**wip-static** (기본) — 단일 스냅샷 + WIP cap:
+```bash
+python run.py train --mode wip-static --from-timekey 20251020070000 --to-timekey 20251020120000 --steps 50000
+python run.py train --mode wip-static --benchmark-dataset benchmarks/benchmark_01 --steps 50000
+python run.py infer --mode wip-static
+python run.py infer --mode wip-static --timekey 20251020070000
+python run.py infer --mode wip-static --benchmark-dataset benchmarks/benchmark_01 --output artifacts/inference/wip_static.csv
+python run.py eval  --mode wip-static
+# --mode 생략 시 wip-static이 기본
+python run.py eval
+```
+
+**dynamic** — 멀티 피리어드 WIP 흐름 + 전환 비용:
+```bash
+python run.py train --mode dynamic --from-timekey 20251020070000 --to-timekey 20251020120000
+python run.py train --mode dynamic --benchmark-dataset benchmarks/benchmark_11
+python run.py infer --mode dynamic
+python run.py infer --mode dynamic --timekey 20251020070000
+python run.py infer --mode dynamic --benchmark-dataset benchmarks/benchmark_11 --output artifacts/inference/dynamic.csv
+python run.py eval  --mode dynamic
+# 슬롯 수 / 슬롯 길이 / 전환 시간은 config/settings.json의 dynamic.* 키로 조정
+```
+
+**세 모드 동시 평가**:
+```bash
+python run.py eval --mode all   # plan-only + wip-static + dynamic 나란히, 모드별 HTML/MD 리포트 출력
+```
+
+### 학습 속도 옵션 (`config/settings.json` → `speed`)
+
+- **`num_envs`** (기본 1) — PPO 롤아웃을 SubprocVecEnv로 병렬화. 큰 환경/
+  많은 스냅샷에서는 4–8로 올려 5–8× 가속. 작은 데모는 IPC 오버헤드 때문에 1 권장.
+- **`device`** (기본 `"auto"`) — CUDA/MPS 자동 감지. CPU만 있어도 안전.
+- **`imitation_loss_target`** (기본 0.05) — cross-entropy 손실이 이 값보다
+  내려가면 imitation 조기 종료. thrashing 시나리오에서 1500 epoch → 평균 ~700
+  epoch로 줄어 ~3× 가속.
+
 - `core`: domain model, simulator, optimizer, evaluation, optional RL training interface.
 - `biz`: Oracle/config adapters that map real tables into core datasets and persist output tables.
-- `benchmarks`: 7 CSV benchmark datasets plus `ground_truth.json` for DB-free validation.
+- `benchmarks`: 11 CSV benchmark datasets plus `ground_truth.json` for DB-free validation.
 - `config/settings.json`: Oracle connection and output table/model artifact settings.
 
 Optional packages:
@@ -137,4 +206,36 @@ Optional packages:
 ```bash
 pip install -e .[rl,oracle]
 ```
+
+### WIP handling (단일 스냅샷)
+
+각 OPER의 생산량은 `WIP_QTY`를 상한으로 캡된다 — 재공이 부족하면 장비가 남아도
+그 이상 생산하지 못한다. 단일 스냅샷 경로에서 WIP=0/미기록은 하위호환을 위해
+"무제한"으로 간주한다 (`benchmark_11`이 OP20 재공 50개 한계를 검증).
+
+### 멀티 피리어드 (WIP 흐름) — `core/flow.py`
+
+단일 스냅샷은 "지금 충분한 재공"을 가정한다. 실제로는 하위 공정 큐가 비어있어
+**앞 공정에서 재공을 먼저 쌓고(build-ahead) → 전환 → 뒤 공정 처리**가 필요하다.
+`MultiPeriodSimulator`는 horizon을 슬롯으로 쪼개고, 각 슬롯의 생산이 다음 공정
+(OPER_SEQ 순)의 재공으로 **다음 슬롯에** 흘러가도록 모델링한다. 슬롯마다 정책이
+현재 재공/잔여계획을 보고 재배치하며, 배치를 넘으면 전환으로 집계된다.
+
+```bash
+python test_multiperiod.py            # 두 시나리오 정책 비교 (DB 없음)
+python scripts/train_multiperiod.py   # 멀티 피리어드 RL 학습 + 평가
+```
+
+검증 시나리오 (`test_multiperiod.py`):
+- **build-ahead** (OP20 큐 비어있음): static 0.5, dynamic 1.0, optimal 1.0.
+  앞공정 OP10에서 재공 빌드 → 다음 슬롯 OP20 전환.
+- **thrashing** (4 제품, 2 배치 교차, switch_time=0.5h):
+  static 0.25, dynamic 0.625 (3 전환), optimal 0.875 (1 전환 — 배치 묶기 A A B B).
+
+멀티 피리어드 RL (`core/rl_env_mp.py` + `core/rl_train_mp.py`):
+- Gym 환경: substep마다 단위 1개 할당; 슬롯 풀이 비면 자동 commit + WIP 흐름 적용.
+- 학습: `multiperiod_optimal` teacher의 슬롯별 액션 시퀀스로 cross-entropy 모방학습.
+  현 시나리오에서 PPO build-ahead 1.0 / thrashing 0.875 — 두 시나리오 모두 optimal 달성.
+
+정책: `static_policy`, `dynamic_greedy_policy`, 소규모 정확해 `multiperiod_optimal`, 그리고 학습된 PPO.
 

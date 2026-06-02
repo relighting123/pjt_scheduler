@@ -38,6 +38,7 @@ class DispatchEnv(gym.Env if gym is not None else object):
         problems: List[SchedulingProblem],
         switch_penalty: float = 0.02,
         achievement_weight: float = 1.0,
+        ignore_wip: bool = False,
         seed: Optional[int] = None,
     ) -> None:
         if gym is None:
@@ -48,6 +49,7 @@ class DispatchEnv(gym.Env if gym is not None else object):
         self.problems = problems
         self.switch_penalty = float(switch_penalty)
         self.achievement_weight = float(achievement_weight)
+        self.ignore_wip = bool(ignore_wip)
         self._rng = np.random.default_rng(seed)
 
         # action: bucket_idx * (MAX_TARGETS + 1) + target_idx_or_noop
@@ -72,6 +74,7 @@ class DispatchEnv(gym.Env if gym is not None else object):
         self.bucket_free: np.ndarray = np.zeros(self.MAX_BUCKETS, dtype=np.int32)
         self.target_shortfall: np.ndarray = np.zeros(self.MAX_TARGETS, dtype=np.float32)
         self.target_plan: np.ndarray = np.zeros(self.MAX_TARGETS, dtype=np.float32)
+        self.target_wip: np.ndarray = np.zeros(self.MAX_TARGETS, dtype=np.float32)
         self.uph_matrix: np.ndarray = np.zeros((self.MAX_BUCKETS, self.MAX_TARGETS), dtype=np.float32)
         self.avail_matrix: np.ndarray = np.zeros((self.MAX_BUCKETS, self.MAX_TARGETS), dtype=np.float32)
         self._allocations: List[Allocation] = []
@@ -88,9 +91,16 @@ class DispatchEnv(gym.Env if gym is not None else object):
 
         targets = problem.plan_targets()[: self.MAX_TARGETS]
         self.target_keys = [(pk, op) for pk, op, _ in targets]
-        for j, (_, _, plan_qty) in enumerate(targets):
+        for j, (pk, op, plan_qty) in enumerate(targets):
             self.target_plan[j] = float(plan_qty)
             self.target_shortfall[j] = float(plan_qty)
+            if self.ignore_wip:
+                self.target_wip[j] = float("inf")
+            else:
+                wip = problem.wip_of(pk, op)
+                # 0/negative WIP record => unlimited (back-compat with snapshots
+                # that omit WIP).
+                self.target_wip[j] = float(wip) if wip > 0 else float("inf")
 
         plan_scale = max(1.0, float(self.target_plan.max()))
         for i, (b_id, model) in enumerate(self.bucket_keys):
@@ -141,8 +151,13 @@ class DispatchEnv(gym.Env if gym is not None else object):
                 pk, op = self.target_keys[target_idx]
                 uph = self.problem.uph_of(pk, op, model)
                 self.bucket_free[bucket_idx] -= 1
-                marginal = min(self.target_shortfall[target_idx], uph)
-                self.target_shortfall[target_idx] = max(0.0, self.target_shortfall[target_idx] - uph)
+                # marginal contribution is bounded by remaining plan AND remaining WIP.
+                wip_left = float(self.target_wip[target_idx])
+                effective_uph = min(uph, wip_left)
+                marginal = min(self.target_shortfall[target_idx], effective_uph)
+                self.target_shortfall[target_idx] = max(0.0, self.target_shortfall[target_idx] - effective_uph)
+                if wip_left != float("inf"):
+                    self.target_wip[target_idx] = max(0.0, wip_left - uph)
                 plan = max(1.0, float(self.target_plan[target_idx]))
                 reward += self.achievement_weight * (marginal / plan) / max(1, len(self.target_keys))
                 # log allocation
@@ -186,3 +201,32 @@ class DispatchEnv(gym.Env if gym is not None else object):
             rule_timekey=self.problem.rule_timekey if self.problem else "",
             allocations=list(self._allocations),
         )
+
+    # ------------------------------------------------------------------
+    def action_masks(self) -> np.ndarray:
+        """Return a boolean mask over the discrete action space.
+
+        Used by sb3_contrib.MaskablePPO so the policy never samples an action
+        whose (bucket, target) is unavailable / saturated. NO-OP always valid.
+        """
+        mask = np.zeros(self.MAX_BUCKETS * (self.MAX_TARGETS + 1), dtype=bool)
+        n_buckets = len(self.bucket_keys)
+        n_targets = len(self.target_keys)
+        stride = self.MAX_TARGETS + 1
+        for i in range(n_buckets):
+            if self.bucket_free[i] <= 0:
+                # Even the NO-OP for this bucket index stays valid as a commit
+                # signal; SB3 requires every state to have at least one True.
+                mask[i * stride + self.MAX_TARGETS] = True
+                continue
+            for j in range(n_targets):
+                if (
+                    self.avail_matrix[i, j] > 0.0
+                    and self.target_shortfall[j] > 0.0
+                ):
+                    mask[i * stride + j] = True
+            mask[i * stride + self.MAX_TARGETS] = True  # NO-OP
+        if not mask.any():
+            # SB3 requires non-empty mask; default to a NO-OP on bucket 0.
+            mask[self.MAX_TARGETS] = True
+        return mask
