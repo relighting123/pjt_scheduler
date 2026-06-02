@@ -91,10 +91,13 @@ def train_multiperiod(
     ppo_ent_coef: float = 0.02,
     achievement_weight: float = 1.0,
     seed: int = 7,
+    num_envs: int = 1,
+    device: str = "auto",
+    imitation_loss_target: float = 0.05,
 ) -> str:
     try:
         from stable_baselines3 import PPO
-        from stable_baselines3.common.vec_env import DummyVecEnv
+        from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
         import torch
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("stable-baselines3 is required; install pjt_scheduler[rl].") from exc
@@ -102,26 +105,34 @@ def train_multiperiod(
     Path(artifact_dir).mkdir(parents=True, exist_ok=True)
     save_path = str(Path(artifact_dir) / f"{policy_name}.zip")
 
-    def make_env():
-        return MultiPeriodDispatchEnv(
-            problems,
-            num_slots=num_slots,
-            slot_hours=slot_hours,
-            switch_time_hours=switch_time_hours,
-            achievement_weight=achievement_weight,
-            seed=seed,
-        )
+    def make_env(rank: int = 0):
+        def _init():
+            return MultiPeriodDispatchEnv(
+                problems,
+                num_slots=num_slots,
+                slot_hours=slot_hours,
+                switch_time_hours=switch_time_hours,
+                achievement_weight=achievement_weight,
+                seed=seed + rank,
+            )
+        return _init
 
-    vec = DummyVecEnv([make_env])
+    n = max(1, int(num_envs))
+    vec = DummyVecEnv([make_env(0)]) if n == 1 else SubprocVecEnv([make_env(i) for i in range(n)])
+
     model = PPO(
         "MlpPolicy", vec,
         learning_rate=ppo_learning_rate,
         n_steps=ppo_n_steps, batch_size=ppo_batch_size, gamma=ppo_gamma,
-        ent_coef=ppo_ent_coef, seed=seed, verbose=0,
+        ent_coef=ppo_ent_coef, device=device, seed=seed, verbose=0,
     )
 
     # --- imitation warm-start from multiperiod_optimal -------------------
-    teacher_env = make_env()
+    teacher_env = MultiPeriodDispatchEnv(
+        problems, num_slots=num_slots, slot_hours=slot_hours,
+        switch_time_hours=switch_time_hours,
+        achievement_weight=achievement_weight, seed=seed,
+    )
     obs_dataset: List[np.ndarray] = []
     act_dataset: List[int] = []
     for problem in problems:
@@ -131,8 +142,9 @@ def train_multiperiod(
         act_dataset.extend(act_seq)
 
     if obs_dataset:
-        obs_tensor = torch.as_tensor(np.array(obs_dataset), dtype=torch.float32)
-        act_tensor = torch.as_tensor(np.array(act_dataset), dtype=torch.long)
+        dev = next(model.policy.parameters()).device
+        obs_tensor = torch.as_tensor(np.array(obs_dataset), dtype=torch.float32, device=dev)
+        act_tensor = torch.as_tensor(np.array(act_dataset), dtype=torch.long, device=dev)
         optimizer = torch.optim.Adam(model.policy.parameters(), lr=1e-3)
         loss_fn = torch.nn.CrossEntropyLoss()
         model.policy.train()
@@ -143,8 +155,12 @@ def train_multiperiod(
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            if float(loss.item()) < imitation_loss_target:
+                break
 
     # --- PPO continuation ------------------------------------------------
-    model.learn(total_timesteps=int(ppo_total_steps))
+    if ppo_total_steps > 0:
+        model.learn(total_timesteps=int(ppo_total_steps))
     model.save(save_path)
+    vec.close()
     return save_path

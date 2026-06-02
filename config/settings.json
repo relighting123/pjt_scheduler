@@ -27,6 +27,11 @@
     "slot_hours": 1.0,
     "switch_time_hours": 0.0
   },
+  "speed": {
+    "num_envs": 1,
+    "device": "auto",
+    "imitation_loss_target": 0.05
+  },
   "reward": {
     "achievement_weight": 1.0,
     "switch_penalty": 0.02

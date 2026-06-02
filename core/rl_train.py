@@ -78,11 +78,20 @@ def train(
     achievement_weight: float = 1.0,
     ignore_wip: bool = False,
     seed: int = 7,
+    num_envs: int = 1,
+    device: str = "auto",
+    imitation_loss_target: float = 0.05,
 ) -> str:
-    """Run imitation warm-start + PPO. Returns the path to the saved policy."""
+    """Run imitation warm-start + PPO. Returns the path to the saved policy.
+
+    Speed knobs:
+      num_envs:   parallel rollout envs (SubprocVecEnv when >1) — 5-8× on CPU.
+      device:     "auto" picks CUDA/MPS when available, else CPU.
+      imitation_loss_target: stop CE early once batch loss drops below this.
+    """
     try:
         from stable_baselines3 import PPO
-        from stable_baselines3.common.vec_env import DummyVecEnv
+        from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
         import torch
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("stable-baselines3 is required for training; install pjt_scheduler[rl].") from exc
@@ -90,16 +99,23 @@ def train(
     Path(artifact_dir).mkdir(parents=True, exist_ok=True)
     save_path = str(Path(artifact_dir) / f"{policy_name}.zip")
 
-    def make_env() -> DispatchEnv:
-        return DispatchEnv(
-            problems,
-            switch_penalty=switch_penalty,
-            achievement_weight=achievement_weight,
-            ignore_wip=ignore_wip,
-            seed=seed,
-        )
+    def make_env(rank: int = 0):
+        def _init():
+            return DispatchEnv(
+                problems,
+                switch_penalty=switch_penalty,
+                achievement_weight=achievement_weight,
+                ignore_wip=ignore_wip,
+                seed=seed + rank,
+            )
+        return _init
 
-    vec = DummyVecEnv([make_env])
+    n = max(1, int(num_envs))
+    if n == 1:
+        vec = DummyVecEnv([make_env(0)])
+    else:
+        vec = SubprocVecEnv([make_env(i) for i in range(n)])
+
     model = PPO(
         "MlpPolicy",
         vec,
@@ -107,15 +123,18 @@ def train(
         n_steps=ppo_n_steps,
         batch_size=ppo_batch_size,
         gamma=ppo_gamma,
+        device=device,
         seed=seed,
         verbose=0,
     )
 
     # --- imitation warm-start --------------------------------------------
-    teacher_env = make_env()
+    teacher_env = DispatchEnv(
+        problems, switch_penalty=switch_penalty,
+        achievement_weight=achievement_weight, ignore_wip=ignore_wip, seed=seed,
+    )
     obs_dataset: List[np.ndarray] = []
     act_dataset: List[int] = []
-    # iterate over each training problem deterministically so coverage is full
     for problem in problems:
         teacher_env._load_problem(problem)
         obs_seq, act_seq = _teacher_rollout(teacher_env)
@@ -123,8 +142,9 @@ def train(
         act_dataset.extend(act_seq)
 
     if obs_dataset:
-        obs_tensor = torch.as_tensor(np.array(obs_dataset), dtype=torch.float32)
-        act_tensor = torch.as_tensor(np.array(act_dataset), dtype=torch.long)
+        dev = next(model.policy.parameters()).device
+        obs_tensor = torch.as_tensor(np.array(obs_dataset), dtype=torch.float32, device=dev)
+        act_tensor = torch.as_tensor(np.array(act_dataset), dtype=torch.long, device=dev)
         optimizer = torch.optim.Adam(model.policy.parameters(), lr=1e-3)
         loss_fn = torch.nn.CrossEntropyLoss()
         model.policy.train()
@@ -135,10 +155,14 @@ def train(
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            if float(loss.item()) < imitation_loss_target:
+                break
 
     # --- PPO continuation -------------------------------------------------
-    model.learn(total_timesteps=int(ppo_total_steps))
+    if ppo_total_steps > 0:
+        model.learn(total_timesteps=int(ppo_total_steps))
     model.save(save_path)
+    vec.close()
     return save_path
 
 

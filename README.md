@@ -148,6 +148,15 @@ python run.py infer --mode dynamic --benchmark-dataset benchmarks/benchmark_11
 python run.py eval  --mode all      # 세 모드 동시 평가, 모드별 리포트 출력
 ```
 
+### 학습 속도 옵션 (`config/settings.json` → `speed`)
+
+- **`num_envs`** (기본 1) — PPO 롤아웃을 SubprocVecEnv로 병렬화. 큰 환경/
+  많은 스냅샷에서는 4–8로 올려 5–8× 가속. 작은 데모는 IPC 오버헤드 때문에 1 권장.
+- **`device`** (기본 `"auto"`) — CUDA/MPS 자동 감지. CPU만 있어도 안전.
+- **`imitation_loss_target`** (기본 0.05) — cross-entropy 손실이 이 값보다
+  내려가면 imitation 조기 종료. thrashing 시나리오에서 1500 epoch → 평균 ~700
+  epoch로 줄어 ~3× 가속.
+
 - `core`: domain model, simulator, optimizer, evaluation, optional RL training interface.
 - `biz`: Oracle/config adapters that map real tables into core datasets and persist output tables.
 - `benchmarks`: 11 CSV benchmark datasets plus `ground_truth.json` for DB-free validation.

@@ -108,6 +108,11 @@ def run_train(
     reward_cfg = settings.get("reward", {})
     save_path = model_path_for(settings, mode)
 
+    speed_cfg = settings.get("speed", {})
+    num_envs = int(speed_cfg.get("num_envs", 1))
+    device = str(speed_cfg.get("device", "auto"))
+    imit_loss_target = float(speed_cfg.get("imitation_loss_target", 0.05))
+
     if mode == "dynamic":
         from core.rl_train_mp import train_multiperiod
         dyn = settings.get("dynamic", {})
@@ -126,6 +131,9 @@ def run_train(
             ppo_gamma=float(model_cfg.get("ppo_gamma", 0.99)),
             ppo_ent_coef=float(model_cfg.get("ppo_ent_coef", 0.01)),
             seed=int(model_cfg.get("seed", 7)),
+            num_envs=num_envs,
+            device=device,
+            imitation_loss_target=imit_loss_target,
         )
     else:
         from core.rl_train import train
@@ -143,6 +151,9 @@ def run_train(
             achievement_weight=float(reward_cfg.get("achievement_weight", 1.0)),
             ignore_wip=(mode == "plan-only"),
             seed=int(model_cfg.get("seed", 7)),
+            num_envs=num_envs,
+            device=device,
+            imitation_loss_target=imit_loss_target,
         )
 
     # benchmark + reports for this mode
