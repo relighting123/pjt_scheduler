@@ -102,11 +102,11 @@ def main() -> int:
         vec = DummyVecEnv([make_env])
         model = PPO(
             "MlpPolicy", vec,
-            learning_rate=3e-4,
+            learning_rate=5e-4,
             n_steps=256, batch_size=64, gamma=0.99,
-            ent_coef=0.02, seed=7, verbose=0,
+            ent_coef=0.05, seed=7, verbose=0,
         )
-        model.learn(total_timesteps=80000)
+        model.learn(total_timesteps=150000)
 
         eval_env = make_env()
         schedule = _replay_from_env(eval_env, model, problem)

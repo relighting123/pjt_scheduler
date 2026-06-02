@@ -230,18 +230,16 @@ class MultiPeriodDispatchEnv(gym.Env if gym is not None else object):
         terminated = False
         info: Dict = {}
 
-        if is_noop or bucket_idx >= len(self.bucket_keys) or self.bucket_free.sum() == 0:
-            # commit slot
-            reward += self._commit_slot()
-            if self.slot_idx >= self.num_slots:
-                terminated = True
-        else:
+        commit_now = is_noop or bucket_idx >= len(self.bucket_keys)
+        if not commit_now:
             target_idx = target_or_noop
             if (
                 target_idx >= len(self.target_keys)
                 or self.bucket_free[bucket_idx] <= 0
                 or self.avail_matrix[bucket_idx, target_idx] <= 0.0
+                or float(self.target_wip[target_idx]) <= 0.0
             ):
+                # invalid / wasteful substep: no allocation, small shaping
                 reward -= 0.01
             else:
                 b_id, model = self.bucket_keys[bucket_idx]
@@ -249,14 +247,10 @@ class MultiPeriodDispatchEnv(gym.Env if gym is not None else object):
                 uph = self.problem.uph_of(pk, op, model)
                 self.bucket_free[bucket_idx] -= 1
                 wip_left = float(self.target_wip[target_idx])
-                effective_uph = min(uph * self.slot_hours, wip_left if wip_left > 0 else uph * self.slot_hours)
-                if wip_left <= 0:
-                    # empty queue this slot: no production, small negative shaping
-                    effective_uph = 0.0
-                marginal = min(self.target_shortfall[target_idx], effective_uph)
-                self.target_shortfall[target_idx] = max(0.0, self.target_shortfall[target_idx] - effective_uph)
-                if wip_left > 0:
-                    self.target_wip[target_idx] = max(0.0, wip_left - effective_uph)
+                effective_uph = min(uph * self.slot_hours, wip_left)
+                marginal = min(float(self.target_shortfall[target_idx]), effective_uph)
+                self.target_shortfall[target_idx] = max(0.0, float(self.target_shortfall[target_idx]) - effective_uph)
+                self.target_wip[target_idx] = max(0.0, wip_left - effective_uph)
                 plan = max(1.0, float(self.target_plan[target_idx]))
                 reward += self.achievement_weight * (marginal / plan) / max(1, len(self.target_keys))
                 # record allocation
@@ -274,6 +268,13 @@ class MultiPeriodDispatchEnv(gym.Env if gym is not None else object):
                                    oper_id=op, eqp_model_cd=model, eqp_qty=1)
                     )
                 self.prev_bucket_target[bucket_idx] = target_idx
+
+        # auto-commit when buckets are empty so the agent never spends a step
+        # on a no-op forced by saturation.
+        if commit_now or self.bucket_free.sum() == 0:
+            reward += self._commit_slot()
+            if self.slot_idx >= self.num_slots:
+                terminated = True
 
         info["slot"] = self.slot_idx
         info["cumulative"] = dict(self._cumulative)
