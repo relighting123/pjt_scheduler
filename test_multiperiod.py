@@ -52,44 +52,93 @@ def build_buildahead_problem() -> SchedulingProblem:
     )
 
 
-def main() -> int:
-    problem = build_buildahead_problem()
-    num_slots, slot_hours = 2, 1.0
-    sim = MultiPeriodSimulator(problem, num_slots=num_slots, slot_hours=slot_hours)
+def build_thrashing_problem() -> SchedulingProblem:
+    """Four products alternating between two batches (G001 = {A, B}).
 
+    Plans, UPH and slot length are sized so that each (pk, op) needs *exactly*
+    one full slot to be satisfied. Greedy processes targets in dict order
+    (P1, P2, P3, P4), which alternates batches every slot and pays the switch
+    cost on slots 1/2/3 — total production = 4·100 − 3·50 = 250 → avg 0.625.
+
+    The optimum groups by batch (P1, P3 on A first, then P2, P4 on B), paying
+    the cost on slot 2 only — total = 4·100 − 1·50 = 350 → avg 0.875.
+    """
+    rk = "2026051707000200"
+    pairs = [("P1", "A"), ("P2", "B"), ("P3", "A"), ("P4", "B")]
+    targets = [(pk, "OP10", 100.0) for pk, _ in pairs]
+    return SchedulingProblem(
+        rule_timekey=rk,
+        wip=[WipRecord(rk, pk, "OP10", 1, 999999.0) for pk, _ in pairs],
+        uph=[UphRecord(rk, pk, "OP10", "T_GP", 100.0) for pk, _ in pairs],
+        # All units physically the same model; "batch" toggles. We pool the
+        # single unit under batch A; the tool-group lets it serve B too.
+        equipment=[EquipmentRecord(rk, "A", "T_GP", 1)],
+        availability=[AvailabilityRecord(rk, pk, "OP10", "T_GP", True) for pk, _ in pairs],
+        tool_groups=[ToolGroupRecord(rk, batch, pk, "OP10") for pk, batch in pairs],
+        tool_qty=[ToolQtyRecord(rk, "A", "T_GP", 1)],
+        plans=[PlanRecord(rk, pk, "OP10", rk, rk, qty) for pk, _, qty in
+               [(pk, b, q) for (pk, b), (_, _, q) in zip(pairs, targets)]],
+        eqp_model_groups={"G001": ["A", "B"]},
+    )
+
+
+def _run_scenario(name, problem, num_slots, slot_hours, switch_time_hours,
+                  expected_static, expected_dynamic, expected_optimal) -> int:
+    sim = MultiPeriodSimulator(problem, num_slots, slot_hours, switch_time_hours)
     static = sim.run(static_policy)
     dynamic = sim.run(dynamic_greedy_policy)
-    optimal = multiperiod_optimal(problem, num_slots=num_slots, slot_hours=slot_hours)
+    optimal = multiperiod_optimal(problem, num_slots, slot_hours, switch_time_hours)
 
-    print("Build-ahead scenario (1 unit, OP10 abundant, OP20 empty, 2 slots)")
+    print(f"\n=== {name} (slots={num_slots}, switch_time={switch_time_hours}h) ===")
     print(f"{'policy':<18} {'avg_achv':>9} {'switches':>9}")
     print("-" * 40)
-    for name, r in (("static (phase-1)", static), ("dynamic greedy", dynamic), ("optimal", optimal)):
-        print(f"{name:<18} {r.avg_achievement:>9.3f} {r.total_switches:>9}")
+    for label, r in (("static (phase-1)", static), ("dynamic greedy", dynamic), ("optimal", optimal)):
+        print(f"{label:<18} {r.avg_achievement:>9.3f} {r.total_switches:>9}")
 
-    print("\nOptimal schedule (slot -> allocations):")
+    print("Optimal schedule:")
     for i, alloc in enumerate(optimal.schedule):
-        items = [(a.oper_id, a.eqp_model_cd, a.eqp_qty) for a in alloc.allocations] or ["idle"]
+        items = [(a.plan_prod_key, a.oper_id, a.batch_id, a.eqp_qty) for a in alloc.allocations] or ["idle"]
         print(f"  slot {i}: {items}")
 
-    # assertions: static can satisfy only one op; dynamic/optimal satisfy both
     failures = 0
-    if not (abs(static.avg_achievement - 0.5) < 1e-6):
-        print(f"FAIL: static expected 0.5, got {static.avg_achievement}")
-        failures += 1
-    if not (abs(dynamic.avg_achievement - 1.0) < 1e-6):
-        print(f"FAIL: dynamic expected 1.0, got {dynamic.avg_achievement}")
-        failures += 1
-    if not (abs(optimal.avg_achievement - 1.0) < 1e-6):
-        print(f"FAIL: optimal expected 1.0, got {optimal.avg_achievement}")
-        failures += 1
+    for label, got, want in (("static", static.avg_achievement, expected_static),
+                             ("dynamic", dynamic.avg_achievement, expected_dynamic),
+                             ("optimal", optimal.avg_achievement, expected_optimal)):
+        if abs(got - want) > 1e-6:
+            print(f"FAIL [{name}/{label}]: expected {want}, got {got}")
+            failures += 1
+    return failures
+
+
+def main() -> int:
+    failures = 0
+
+    # Build-ahead — dynamic recovers what static can't.
+    failures += _run_scenario(
+        "build-ahead (OP20 starts empty)",
+        build_buildahead_problem(),
+        num_slots=2, slot_hours=1.0, switch_time_hours=0.0,
+        expected_static=0.5, expected_dynamic=1.0, expected_optimal=1.0,
+    )
+
+    # Thrashing — dynamic greedy pays per-slot switch cost; optimal batches.
+    # 4 slots, switch_time 0.5h. Plan 200 each, UPH 100/slot.
+    #   alternating P1 P2 P1 P2 (3 switches): production 100+50+50+50=250 split
+    #     → P1≈150, P2≈100 → avg 0.625
+    #   batched     P1 P1 P2 P2 (1 switch ):  100+100+50+100=350 split
+    #     → P1=200 (1.0), P2=150 (0.75) → avg 0.875
+    failures += _run_scenario(
+        "thrashing (switch cost makes batching cheaper)",
+        build_thrashing_problem(),
+        num_slots=4, slot_hours=1.0, switch_time_hours=0.5,
+        expected_static=0.25, expected_dynamic=0.625, expected_optimal=0.875,
+    )
 
     print("-" * 40)
     if failures:
         print(f"FAILED: {failures} checks")
         return 1
-    print("OK: dynamic re-allocation recovers the build-ahead schedule "
-          "(0.5 -> 1.0) that a static single allocation cannot.")
+    print("OK: dynamic > static (build-ahead), optimal > dynamic (thrashing).")
     return 0
 
 

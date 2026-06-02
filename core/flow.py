@@ -50,10 +50,17 @@ class FlowResult:
 
 
 class MultiPeriodSimulator:
-    def __init__(self, problem: SchedulingProblem, num_slots: int = 4, slot_hours: float = 1.0) -> None:
+    def __init__(
+        self,
+        problem: SchedulingProblem,
+        num_slots: int = 4,
+        slot_hours: float = 1.0,
+        switch_time_hours: float = 0.0,
+    ) -> None:
         self.problem = problem
         self.num_slots = int(num_slots)
         self.slot_hours = float(slot_hours)
+        self.switch_time_hours = float(switch_time_hours)
 
     def _initial_wip(self) -> Dict[Tuple[str, str], float]:
         wip: Dict[Tuple[str, str], float] = {}
@@ -74,16 +81,41 @@ class MultiPeriodSimulator:
             remaining_plan = {k: max(0.0, plan[k] - cumulative[k]) for k in plan}
             alloc = policy(problem, dict(wip), remaining_plan, prev_alloc, slot)
             result.schedule.append(alloc)
-            if prev_alloc is not None:
-                result.total_switches += count_switches(prev_alloc, alloc)
+            slot_switches = count_switches(prev_alloc, alloc) if prev_alloc is not None else 0
+            result.total_switches += slot_switches
+
+            # Switch cost model: units that moved into a new (batch, model) this
+            # slot lose `switch_time_hours` of productive time. Per-allocation:
+            # fresh_units = max(0, current_qty - previous_qty_on_same_(batch,model))
+            # effective_hours_for_fresh = max(0, slot_hours - switch_time_hours)
+            # First slot has no prior state — every unit is assumed to start in
+            # the right place (no setup cost). From slot 1 onward, units that
+            # were not on the same (batch, model) last slot pay switch_time.
+            first_slot = prev_alloc is None
+            prev_by_bm: Dict[Tuple[str, str], int] = defaultdict(int)
+            if not first_slot:
+                for a in prev_alloc.allocations:  # type: ignore[union-attr]
+                    prev_by_bm[(a.batch_id, a.eqp_model_cd)] += int(a.eqp_qty)
 
             # capacity this slot per (pk, op), from the allocation
             capacity: Dict[Tuple[str, str], float] = defaultdict(float)
+            consumed_prev: Dict[Tuple[str, str], int] = defaultdict(int)
             for a in alloc.allocations:
                 if not problem.is_available(a.plan_prod_key, a.oper_id, a.eqp_model_cd):
                     continue
+                qty = max(0, int(a.eqp_qty))
+                bm = (a.batch_id, a.eqp_model_cd)
+                if first_slot:
+                    kept_units, fresh_units = qty, 0
+                else:
+                    kept_available = max(0, prev_by_bm[bm] - consumed_prev[bm])
+                    kept_units = min(qty, kept_available)
+                    fresh_units = qty - kept_units
+                    consumed_prev[bm] += kept_units
                 uph = problem.uph_of(a.plan_prod_key, a.oper_id, a.eqp_model_cd)
-                capacity[(a.plan_prod_key, a.oper_id)] += uph * max(0, int(a.eqp_qty)) * self.slot_hours
+                effective_fresh_hours = max(0.0, self.slot_hours - self.switch_time_hours)
+                cap = uph * (kept_units * self.slot_hours + fresh_units * effective_fresh_hours)
+                capacity[(a.plan_prod_key, a.oper_id)] += cap
 
             # produce from the queue snapshot at slot start (latency: this slot's
             # output is only visible downstream next slot)
@@ -139,6 +171,7 @@ def multiperiod_optimal(
     problem: SchedulingProblem,
     num_slots: int,
     slot_hours: float = 1.0,
+    switch_time_hours: float = 0.0,
     max_search: int = 20000,
 ) -> FlowResult:
     """Exact optimum for small instances by DFS over per-slot "pure" allocations.
@@ -167,7 +200,7 @@ def multiperiod_optimal(
     for opts in bucket_options:
         per_slot *= max(1, len(opts))
     if per_slot ** num_slots > max_search:
-        sim = MultiPeriodSimulator(problem, num_slots, slot_hours)
+        sim = MultiPeriodSimulator(problem, num_slots, slot_hours, switch_time_hours)
         return sim.run(dynamic_greedy_policy)
 
     # enumerate per-slot pure allocations
@@ -197,7 +230,7 @@ def multiperiod_optimal(
         nonlocal best
         if slot == num_slots:
             seq = list(plan_so_far)
-            sim = MultiPeriodSimulator(problem, num_slots, slot_hours)
+            sim = MultiPeriodSimulator(problem, num_slots, slot_hours, switch_time_hours)
             idx = {"i": 0}
 
             def replay(problem, wip, remaining_plan, prev_alloc, s):
