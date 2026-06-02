@@ -7,7 +7,7 @@ environment (including the no-DB benchmark harness).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -164,3 +164,21 @@ class SchedulingProblem:
             if eqp_model_cd in members:
                 return list(members)
         return [eqp_model_cd]
+
+    def oper_order_of(self, plan_prod_key: str) -> List[str]:
+        """Operations of a product ordered by OPER_SEQ (process flow order)."""
+        ops = sorted(
+            (seq, op)
+            for (pk, op), seq in self._oper_seq_by_pko.items()
+            if pk == plan_prod_key
+        )
+        return [op for _, op in ops]
+
+    def next_oper_of(self, plan_prod_key: str, oper_id: str) -> Optional[str]:
+        """The downstream operation that WIP flows into, or None if terminal."""
+        order = self.oper_order_of(plan_prod_key)
+        if oper_id in order:
+            idx = order.index(oper_id)
+            if idx + 1 < len(order):
+                return order[idx + 1]
+        return None

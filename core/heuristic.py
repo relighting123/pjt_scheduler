@@ -12,17 +12,41 @@ from typing import Dict, List, Tuple
 from .domain import Allocation, AllocationSet, SchedulingProblem
 
 
-def greedy_allocate(problem: SchedulingProblem) -> AllocationSet:
+def greedy_allocate(
+    problem: SchedulingProblem,
+    wip_override: Dict[Tuple[str, str], float] | None = None,
+    plan_override: Dict[Tuple[str, str], float] | None = None,
+    treat_zero_as_unlimited: bool = True,
+) -> AllocationSet:
+    """Greedy allocation for one time slice.
+
+    Args:
+        wip_override / plan_override: per-(plan_prod_key, oper_id) overrides used
+            by the multi-period engine to feed the *current* WIP queue and the
+            *remaining* plan as the horizon advances. When omitted, the static
+            snapshot values from `problem` are used (single-snapshot mode).
+        treat_zero_as_unlimited: single-snapshot mode treats a 0/missing WIP as
+            "unconstrained" (back-compat). The multi-period engine passes False
+            so that 0 means a genuinely empty queue.
+    """
     pool: Dict[Tuple[str, str], int] = dict(problem.equipment_pool())
-    remaining: Dict[Tuple[str, str], float] = {
-        (pk, op): qty for pk, op, qty in problem.plan_targets()
-    }
+    remaining: Dict[Tuple[str, str], float] = {}
+    for pk, op, qty in problem.plan_targets():
+        if plan_override is not None and (pk, op) in plan_override:
+            remaining[(pk, op)] = float(plan_override[(pk, op)])
+        else:
+            remaining[(pk, op)] = qty
     # WIP cap: each target can produce at most the WIP currently in queue.
-    # WIP <= 0 in the records means "unconstrained" (treated as infinite).
     wip_remaining: Dict[Tuple[str, str], float] = {}
     for (pk, op) in remaining:
-        w = problem.wip_of(pk, op)
-        wip_remaining[(pk, op)] = w if w > 0 else float("inf")
+        if wip_override is not None and (pk, op) in wip_override:
+            w = float(wip_override[(pk, op)])
+        else:
+            w = problem.wip_of(pk, op)
+        if treat_zero_as_unlimited:
+            wip_remaining[(pk, op)] = w if w > 0 else float("inf")
+        else:
+            wip_remaining[(pk, op)] = w
     allocations: List[Allocation] = []
 
     candidates: List[Tuple[str, str]] = list(remaining.keys())

@@ -129,7 +129,7 @@ python run.py infer --benchmark-dataset benchmarks/benchmark_01 --output artifac
 
 - `core`: domain model, simulator, optimizer, evaluation, optional RL training interface.
 - `biz`: Oracle/config adapters that map real tables into core datasets and persist output tables.
-- `benchmarks`: 7 CSV benchmark datasets plus `ground_truth.json` for DB-free validation.
+- `benchmarks`: 11 CSV benchmark datasets plus `ground_truth.json` for DB-free validation.
 - `config/settings.json`: Oracle connection and output table/model artifact settings.
 
 Optional packages:
@@ -137,4 +137,25 @@ Optional packages:
 ```bash
 pip install -e .[rl,oracle]
 ```
+
+### WIP handling (단일 스냅샷)
+
+각 OPER의 생산량은 `WIP_QTY`를 상한으로 캡된다 — 재공이 부족하면 장비가 남아도
+그 이상 생산하지 못한다. 단일 스냅샷 경로에서 WIP=0/미기록은 하위호환을 위해
+"무제한"으로 간주한다 (`benchmark_11`이 OP20 재공 50개 한계를 검증).
+
+### 멀티 피리어드 (WIP 흐름) — `core/flow.py`
+
+단일 스냅샷은 "지금 충분한 재공"을 가정한다. 실제로는 하위 공정 큐가 비어있어
+**앞 공정에서 재공을 먼저 쌓고(build-ahead) → 전환 → 뒤 공정 처리**가 필요하다.
+`MultiPeriodSimulator`는 horizon을 슬롯으로 쪼개고, 각 슬롯의 생산이 다음 공정
+(OPER_SEQ 순)의 재공으로 **다음 슬롯에** 흘러가도록 모델링한다. 슬롯마다 정책이
+현재 재공/잔여계획을 보고 재배치하며, 배치를 넘으면 전환으로 집계된다.
+
+```bash
+python test_multiperiod.py   # DB 없이 build-ahead 시나리오 검증
+```
+
+- `static` (단일 배치 고정) 0.5  vs  `dynamic`(슬롯별 재배치) 1.0  vs  `optimal` 1.0
+- 정책: `static_policy`, `dynamic_greedy_policy`, 소규모 정확해 `multiperiod_optimal`.
 
