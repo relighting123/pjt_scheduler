@@ -1,11 +1,11 @@
 # Model Benchmark
 
-_Updated: 2026-06-02T09:46:43_
+_Updated: 2026-06-02T13:26:12_
 
-- Datasets: **10**
-- Avg Optimal achievement: **0.925**
-- Avg RL achievement: **0.892**
-- Avg Heuristic achievement: **0.792**
+- Datasets: **11**
+- Avg Optimal achievement: **0.898**
+- Avg RL achievement: **0.867**
+- Avg Heuristic achievement: **0.777**
 
 | Dataset | Optimal | RL | Heuristic | Opt Switches | RL Switches |
 |---|---:|---:|---:|---:|---:|
@@ -19,3 +19,4 @@ _Updated: 2026-06-02T09:46:43_
 | benchmark_08 | 1.000 | 1.000 | 0.500 | 0 | 0 |
 | benchmark_09 | 1.000 | 1.000 | 0.500 | 0 | 0 |
 | benchmark_10 | 1.000 | 0.667 | 0.667 | 0 | 0 |
+| benchmark_11 | 0.625 | 0.625 | 0.625 | 0 | 0 |
