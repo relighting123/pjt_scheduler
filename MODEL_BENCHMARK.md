@@ -1,13 +1,18 @@
-# Model Benchmark Record
+# Model Benchmark
 
-Updated: 2026-06-02T00:24:15
+_Updated: 2026-06-02T09:12:42_
 
-| Benchmark | Optimal Avg | Heuristic Avg | RL Avg | Optimal Conv | RL Conv |
-|-----------|-------------|---------------|--------|--------------|---------|
-| benchmark_01 | 0.7964 | 0.5000 | 0.6233 | 1 | 1 |
-| benchmark_02 | 0.8149 | 0.5000 | 0.6272 | 1 | 1 |
-| benchmark_03 | 0.6667 | 0.3333 | 0.5319 | 1 | 2 |
-| benchmark_04 | 0.6168 | 0.3333 | 0.5697 | 1 | 2 |
-| benchmark_05 | 0.4663 | 0.4672 | 0.4667 | 1 | 1 |
-| benchmark_06 | 0.7500 | 0.5000 | 0.5812 | 2 | 3 |
-| benchmark_07 | 0.6366 | 0.3924 | 0.5869 | 2 | 3 |
+- Datasets: **7**
+- Avg Optimal achievement: **0.893**
+- Avg RL achievement: **0.893**
+- Avg Heuristic achievement: **0.893**
+
+| Dataset | Optimal | RL | Heuristic | Opt Switches | RL Switches |
+|---|---:|---:|---:|---:|---:|
+| benchmark_01 | 1.000 | 1.000 | 1.000 | 0 | 0 |
+| benchmark_02 | 1.000 | 1.000 | 1.000 | 0 | 0 |
+| benchmark_03 | 1.000 | 1.000 | 1.000 | 0 | 0 |
+| benchmark_04 | 1.000 | 1.000 | 1.000 | 0 | 0 |
+| benchmark_05 | 1.000 | 1.000 | 1.000 | 0 | 0 |
+| benchmark_06 | 1.000 | 1.000 | 1.000 | 0 | 0 |
+| benchmark_07 | 0.250 | 0.250 | 0.250 | 0 | 0 |

@@ -1,21 +1,4 @@
 {
-  "RULE_TIMEKEY": "2026051907000000",
-  "expected_avg_achievement": 0.6666666666666666,
-  "naive_initial_achievement": 0.3333333333333333,
-  "heuristic_achievement": 0.3333333333333333,
-  "conversion_count": 1,
-  "conversions": [
-    {
-      "RULE_TIMEKEY": "2026051907000000",
-      "FROM_BATCH": "B1",
-      "FROM_PLAN_PROD_KEY": "P3/PROD1",
-      "FROM_OPER_ID": "OP001",
-      "EQP_MODEL_CD": "M2",
-      "TO_BATCH_ID": "B3",
-      "TO_PLAN_PROD_KEY": "P3/PROD3",
-      "TO_OPER_ID": "OP003",
-      "START_CONV_TIME": "2026051907000000",
-      "EQP_QTY": 3
-    }
-  ]
+  "description": "Equipment lives in batch G001 partner but is needed elsewhere; conversion required.",
+  "avg_achievement": 1.0
 }

@@ -1,16 +1,17 @@
-"""Domain models for equipment transition scheduling."""
+"""Domain data classes shared by simulator, optimizer, and RL engine.
 
+The biz layer materializes these from the physical Oracle table and feeds the
+core simulator. Keep this module dependency-free so it can be imported in any
+environment (including the no-DB benchmark harness).
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
-
-import pandas as pd
+from typing import Dict, List, Tuple
 
 
-@dataclass
-class OperWip:
+@dataclass(frozen=True)
+class WipRecord:
     rule_timekey: str
     plan_prod_key: str
     oper_id: str
@@ -18,8 +19,8 @@ class OperWip:
     wip_qty: float
 
 
-@dataclass
-class ModelUph:
+@dataclass(frozen=True)
+class UphRecord:
     rule_timekey: str
     plan_prod_key: str
     oper_id: str
@@ -27,50 +28,42 @@ class ModelUph:
     uph: float
 
 
-@dataclass
-class ModelAvail:
-    rule_timekey: str
-    plan_prod_key: str
-    oper_id: str
-    eqp_model_cd: str
-    avail_yn: str
-
-
-@dataclass
-class EqpCount:
+@dataclass(frozen=True)
+class EquipmentRecord:
     rule_timekey: str
     batch_id: str
     eqp_model_cd: str
     eqp_qty: int
 
 
-@dataclass
-class EquipmentFleet:
-    """Global equipment pool per model (physical fleet cap)."""
-
+@dataclass(frozen=True)
+class AvailabilityRecord:
     rule_timekey: str
+    plan_prod_key: str
+    oper_id: str
     eqp_model_cd: str
-    fleet_qty: int
+    avail_yn: bool
 
 
-@dataclass
-class ToolQty:
-    rule_timekey: str
-    batch_id: str
-    eqp_model_cd: str
-    tool_qty: int
-
-
-@dataclass
-class BatchOper:
+@dataclass(frozen=True)
+class ToolGroupRecord:
+    """batch_id is determined by (plan_prod_key, oper_id). N:1 mapping."""
     rule_timekey: str
     batch_id: str
     plan_prod_key: str
     oper_id: str
 
 
-@dataclass
-class PlanSlot:
+@dataclass(frozen=True)
+class ToolQtyRecord:
+    rule_timekey: str
+    batch_id: str
+    eqp_model_cd: str
+    tool_qty: int
+
+
+@dataclass(frozen=True)
+class PlanRecord:
     rule_timekey: str
     plan_prod_key: str
     oper_id: str
@@ -80,258 +73,94 @@ class PlanSlot:
 
 
 @dataclass
-class ConversionRecord:
-    rule_timekey: str
-    from_batch: str
-    from_plan_prod_key: str
-    from_oper_id: str
+class Allocation:
+    """One equipment-model allocation to a (batch, plan_prod_key, oper)."""
+    batch_id: str
+    plan_prod_key: str
+    oper_id: str
     eqp_model_cd: str
-    to_batch_id: str
-    to_plan_prod_key: str
-    to_oper_id: str
-    start_conv_time: str
     eqp_qty: int
-
-    def to_row(self) -> dict[str, Any]:
-        return {
-            "RULE_TIMEKEY": self.rule_timekey,
-            "FROM_BATCH": self.from_batch,
-            "FROM_PLAN_PROD_KEY": self.from_plan_prod_key,
-            "FROM_OPER_ID": self.from_oper_id,
-            "EQP_MODEL_CD": self.eqp_model_cd,
-            "TO_BATCH_ID": self.to_batch_id,
-            "TO_PLAN_PROD_KEY": self.to_plan_prod_key,
-            "TO_OPER_ID": self.to_oper_id,
-            "START_CONV_TIME": self.start_conv_time,
-            "EQP_QTY": self.eqp_qty,
-        }
 
 
 @dataclass
-class SchedulingDataset:
-    """In-memory scheduling inputs for one RULE_TIMEKEY snapshot."""
-
+class AllocationSet:
+    """Allocation decision plus the prior state, used to derive conversions."""
     rule_timekey: str
-    oper_wip: list[OperWip] = field(default_factory=list)
-    model_uph: list[ModelUph] = field(default_factory=list)
-    eqp_counts: list[EqpCount] = field(default_factory=list)
-    equipment_fleet: list[EquipmentFleet] = field(default_factory=list)
-    model_avail: list[ModelAvail] = field(default_factory=list)
-    batch_opers: list[BatchOper] = field(default_factory=list)
-    tool_qty: list[ToolQty] = field(default_factory=list)
-    plan_slots: list[PlanSlot] = field(default_factory=list)
+    allocations: List[Allocation] = field(default_factory=list)
 
-    def batch_for(self, plan_prod_key: str, oper_id: str) -> str | None:
-        for bo in self.batch_opers:
-            if bo.plan_prod_key == plan_prod_key and bo.oper_id == oper_id:
-                return bo.batch_id
-        return None
 
-    def uph(self, plan_prod_key: str, oper_id: str, eqp_model_cd: str) -> float | None:
-        for row in self.model_uph:
-            if (
-                row.plan_prod_key == plan_prod_key
-                and row.oper_id == oper_id
-                and row.eqp_model_cd == eqp_model_cd
-            ):
-                return row.uph
-        return None
+@dataclass
+class SchedulingProblem:
+    """Materialized snapshot for one rule_timekey.
+
+    Lookups are pre-built so the simulator/optimizer/RL env can stay hot-path
+    cheap (dict/array ops only).
+    """
+    rule_timekey: str
+    wip: List[WipRecord]
+    uph: List[UphRecord]
+    equipment: List[EquipmentRecord]
+    availability: List[AvailabilityRecord]
+    tool_groups: List[ToolGroupRecord]
+    tool_qty: List[ToolQtyRecord]
+    plans: List[PlanRecord]
+    # batch group: conversion is restricted to model codes within the same group
+    eqp_model_groups: Dict[str, List[str]] = field(default_factory=dict)
+
+    # cached lookups
+    _uph_lookup: Dict[Tuple[str, str, str], float] = field(default_factory=dict, init=False, repr=False)
+    _avail_lookup: Dict[Tuple[str, str, str], bool] = field(default_factory=dict, init=False, repr=False)
+    _batch_of_pko: Dict[Tuple[str, str], str] = field(default_factory=dict, init=False, repr=False)
+    _eqp_qty_by_batch_model: Dict[Tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
+    _plan_qty_by_pko: Dict[Tuple[str, str], float] = field(default_factory=dict, init=False, repr=False)
+    _wip_by_pko: Dict[Tuple[str, str], float] = field(default_factory=dict, init=False, repr=False)
+    _oper_seq_by_pko: Dict[Tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        for u in self.uph:
+            self._uph_lookup[(u.plan_prod_key, u.oper_id, u.eqp_model_cd)] = float(u.uph)
+        for a in self.availability:
+            self._avail_lookup[(a.plan_prod_key, a.oper_id, a.eqp_model_cd)] = bool(a.avail_yn)
+        for g in self.tool_groups:
+            self._batch_of_pko[(g.plan_prod_key, g.oper_id)] = g.batch_id
+        for e in self.equipment:
+            key = (e.batch_id, e.eqp_model_cd)
+            self._eqp_qty_by_batch_model[key] = self._eqp_qty_by_batch_model.get(key, 0) + int(e.eqp_qty)
+        for p in self.plans:
+            key = (p.plan_prod_key, p.oper_id)
+            self._plan_qty_by_pko[key] = self._plan_qty_by_pko.get(key, 0.0) + float(p.plan_qty)
+        for w in self.wip:
+            key = (w.plan_prod_key, w.oper_id)
+            self._wip_by_pko[key] = self._wip_by_pko.get(key, 0.0) + float(w.wip_qty)
+            self._oper_seq_by_pko[key] = int(w.oper_seq)
+
+    # --- accessors ----------------------------------------------------------
+    def plan_targets(self) -> List[Tuple[str, str, float]]:
+        return [(pk, op, qty) for (pk, op), qty in self._plan_qty_by_pko.items()]
+
+    def batch_of(self, plan_prod_key: str, oper_id: str) -> str:
+        return self._batch_of_pko.get((plan_prod_key, oper_id), "")
+
+    def uph_of(self, plan_prod_key: str, oper_id: str, eqp_model_cd: str) -> float:
+        return self._uph_lookup.get((plan_prod_key, oper_id, eqp_model_cd), 0.0)
 
     def is_available(self, plan_prod_key: str, oper_id: str, eqp_model_cd: str) -> bool:
-        for row in self.model_avail:
-            if (
-                row.plan_prod_key == plan_prod_key
-                and row.oper_id == oper_id
-                and row.eqp_model_cd == eqp_model_cd
-            ):
-                return str(row.avail_yn).upper() in ("Y", "YES", "1", "TRUE")
-        return False
+        if not self._avail_lookup.get((plan_prod_key, oper_id, eqp_model_cd), False):
+            return False
+        # availability without UPH means cannot proceed
+        return self._uph_lookup.get((plan_prod_key, oper_id, eqp_model_cd), 0.0) > 0.0
 
-    def assigned_qty(self, eqp_model_cd: str) -> int:
-        return sum(e.eqp_qty for e in self.eqp_counts if e.eqp_model_cd == eqp_model_cd)
+    def equipment_pool(self) -> Dict[Tuple[str, str], int]:
+        return dict(self._eqp_qty_by_batch_model)
 
-    def fleet_qty(self, eqp_model_cd: str) -> int:
-        for row in self.equipment_fleet:
-            if row.eqp_model_cd == eqp_model_cd:
-                return row.fleet_qty
-        return self.assigned_qty(eqp_model_cd)
+    def wip_of(self, plan_prod_key: str, oper_id: str) -> float:
+        return self._wip_by_pko.get((plan_prod_key, oper_id), 0.0)
 
-    def total_eqp_qty(self, eqp_model_cd: str) -> int:
-        """Alias for fleet capacity (not summed per-batch assignments)."""
-        return self.fleet_qty(eqp_model_cd)
+    def plan_qty_of(self, plan_prod_key: str, oper_id: str) -> float:
+        return self._plan_qty_by_pko.get((plan_prod_key, oper_id), 0.0)
 
-    def fleet_models(self) -> list[str]:
-        if self.equipment_fleet:
-            return sorted({f.eqp_model_cd for f in self.equipment_fleet})
-        return sorted({e.eqp_model_cd for e in self.eqp_counts})
-
-    def oper_keys(self) -> list[tuple[str, str]]:
-        keys: list[tuple[str, str]] = []
-        seen: set[tuple[str, str]] = set()
-        for slot in self.plan_slots:
-            key = (slot.plan_prod_key, slot.oper_id)
-            if key not in seen:
-                seen.add(key)
-                keys.append(key)
-        for bo in self.batch_opers:
-            key = (bo.plan_prod_key, bo.oper_id)
-            if key not in seen:
-                seen.add(key)
-                keys.append(key)
-        return keys
-
-    def plan_qty_by_oper(self) -> dict[tuple[str, str], float]:
-        totals: dict[tuple[str, str], float] = {}
-        for slot in self.plan_slots:
-            key = (slot.plan_prod_key, slot.oper_id)
-            totals[key] = totals.get(key, 0.0) + slot.plan_qty
-        return totals
-
-    def validate(self) -> list[str]:
-        errors: list[str] = []
-        for key in self.oper_keys():
-            plan_prod_key, oper_id = key
-            models = {m.eqp_model_cd for m in self.model_uph if m.plan_prod_key == plan_prod_key and m.oper_id == oper_id}
-            if not models:
-                errors.append(f"Missing UPH for {plan_prod_key}/{oper_id}")
-            for model in models:
-                if self.uph(plan_prod_key, oper_id, model) is None:
-                    errors.append(f"UPH missing: {plan_prod_key}/{oper_id}/{model}")
-        for model in self.fleet_models():
-            assigned = self.assigned_qty(model)
-            fleet = self.fleet_qty(model)
-            if assigned > fleet:
-                errors.append(
-                    f"Assigned {assigned} exceeds fleet {fleet} for model {model}"
-                )
-        return errors
-
-    @classmethod
-    def from_csv_dir(cls, directory: str | Path, rule_timekey: str | None = None) -> SchedulingDataset:
-        base = Path(directory)
-        meta_path = base / "meta.csv"
-        if meta_path.exists():
-            meta = pd.read_csv(meta_path)
-            rtk = str(meta.iloc[0]["RULE_TIMEKEY"]) if rule_timekey is None else rule_timekey
-        else:
-            rtk = rule_timekey or "2026051707000000"
-
-        def _read(name: str) -> pd.DataFrame:
-            path = base / name
-            if not path.exists():
-                return pd.DataFrame()
-            return pd.read_csv(path)
-
-        ds = cls(rule_timekey=rtk)
-
-        wip_df = _read("oper_wip.csv")
-        for _, r in wip_df.iterrows():
-            ds.oper_wip.append(
-                OperWip(
-                    rule_timekey=str(r.get("RULE_TIMEKEY", rtk)),
-                    plan_prod_key=str(r["PLAN_PROD_KEY"]),
-                    oper_id=str(r["OPER_ID"]),
-                    oper_seq=int(r["OPER_SEQ"]),
-                    wip_qty=float(r["WIP_QTY"]),
-                )
-            )
-
-        uph_df = _read("model_uph.csv")
-        for _, r in uph_df.iterrows():
-            ds.model_uph.append(
-                ModelUph(
-                    rule_timekey=str(r.get("RULE_TIMEKEY", rtk)),
-                    plan_prod_key=str(r["PLAN_PROD_KEY"]),
-                    oper_id=str(r["OPER_ID"]),
-                    eqp_model_cd=str(r["EQP_MODEL_CD"]),
-                    uph=float(r["UPH"]),
-                )
-            )
-
-        eqp_df = _read("eqp_count.csv")
-        for _, r in eqp_df.iterrows():
-            ds.eqp_counts.append(
-                EqpCount(
-                    rule_timekey=str(r.get("RULE_TIMEKEY", rtk)),
-                    batch_id=str(r["BATCH_ID"]),
-                    eqp_model_cd=str(r["EQP_MODEL_CD"]),
-                    eqp_qty=int(r["EQP_QTY"]),
-                )
-            )
-
-        fleet_df = _read("equipment_fleet.csv")
-        for _, r in fleet_df.iterrows():
-            ds.equipment_fleet.append(
-                EquipmentFleet(
-                    rule_timekey=str(r.get("RULE_TIMEKEY", rtk)),
-                    eqp_model_cd=str(r["EQP_MODEL_CD"]),
-                    fleet_qty=int(r["FLEET_QTY"]),
-                )
-            )
-
-        avail_df = _read("model_avail.csv")
-        for _, r in avail_df.iterrows():
-            ds.model_avail.append(
-                ModelAvail(
-                    rule_timekey=str(r.get("RULE_TIMEKEY", rtk)),
-                    plan_prod_key=str(r["PLAN_PROD_KEY"]),
-                    oper_id=str(r["OPER_ID"]),
-                    eqp_model_cd=str(r["EQP_MODEL_CD"]),
-                    avail_yn=str(r["AVAIL_YN"]),
-                )
-            )
-
-        batch_df = _read("batch_oper.csv")
-        for _, r in batch_df.iterrows():
-            ds.batch_opers.append(
-                BatchOper(
-                    rule_timekey=str(r.get("RULE_TIMEKEY", rtk)),
-                    batch_id=str(r["BATCH_ID"]),
-                    plan_prod_key=str(r["PLAN_PROD_KEY"]),
-                    oper_id=str(r["OPER_ID"]),
-                )
-            )
-
-        tool_df = _read("tool_qty.csv")
-        for _, r in tool_df.iterrows():
-            ds.tool_qty.append(
-                ToolQty(
-                    rule_timekey=str(r.get("RULE_TIMEKEY", rtk)),
-                    batch_id=str(r["BATCH_ID"]),
-                    eqp_model_cd=str(r["EQP_MODEL_CD"]),
-                    tool_qty=int(r["TOOL_QTY"]),
-                )
-            )
-
-        plan_df = _read("plan_slots.csv")
-        for _, r in plan_df.iterrows():
-            ds.plan_slots.append(
-                PlanSlot(
-                    rule_timekey=str(r.get("RULE_TIMEKEY", rtk)),
-                    plan_prod_key=str(r["PLAN_PROD_KEY"]),
-                    oper_id=str(r["OPER_ID"]),
-                    start_time=str(r["START_TIME"]),
-                    end_time=str(r["END_TIME"]),
-                    plan_qty=float(r["PLAN_QTY"]),
-                )
-            )
-
-        return ds
-
-    def to_conversions_df(self, records: list[ConversionRecord]) -> pd.DataFrame:
-        if not records:
-            return pd.DataFrame(
-                columns=[
-                    "RULE_TIMEKEY",
-                    "FROM_BATCH",
-                    "FROM_PLAN_PROD_KEY",
-                    "FROM_OPER_ID",
-                    "EQP_MODEL_CD",
-                    "TO_BATCH_ID",
-                    "TO_PLAN_PROD_KEY",
-                    "TO_OPER_ID",
-                    "START_CONV_TIME",
-                    "EQP_QTY",
-                ]
-            )
-        return pd.DataFrame([r.to_row() for r in records])
+    def model_group_of(self, eqp_model_cd: str) -> List[str]:
+        for members in self.eqp_model_groups.values():
+            if eqp_model_cd in members:
+                return list(members)
+        return [eqp_model_cd]

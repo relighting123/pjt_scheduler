@@ -1,29 +1,30 @@
-[build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "pjt-scheduling"
+name = "pjt_scheduler"
 version = "0.1.0"
-description = "Equipment transition scheduling with imitation learning and PPO"
-readme = "README.md"
+description = "Equipment switching scheduler with imitation + reinforcement learning."
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
     "pandas>=2.0",
-    "gymnasium>=0.29",
-    "stable-baselines3>=2.2",
-    "torch>=2.0",
     "jinja2>=3.1",
 ]
 
 [project.optional-dependencies]
-oracle = ["oracledb>=2.0"]
-rl = ["stable-baselines3>=2.2", "torch>=2.0"]
+rl = [
+    "gymnasium>=0.29",
+    "stable-baselines3>=2.3",
+    "torch>=2.1",
+]
+oracle = [
+    "oracledb>=2.0",
+]
+dev = [
+    "pytest>=8.0",
+]
 
-[project.scripts]
-scheduling-rl = "run:main"
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["."]
 include = ["core*", "biz*"]

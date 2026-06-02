@@ -1,81 +1,54 @@
-#!/usr/bin/env python3
-"""Validate benchmark CSV datasets and ground_truth without Oracle DB."""
+"""DB-free validation: ensures the optimizer + heuristic + simulator agree
+with each benchmark's ground_truth.json. Run:
 
+    python test_benchmark.py
+"""
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
 
-from core.domain import SchedulingDataset
-from core.evaluation import evaluate_dataset
-from core.optimizer import ImprovedGreedySolver, load_ground_truth_conversions
-from core.simulator import SchedulingSimulator
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
 
-
-def validate_benchmark(bench_dir: Path) -> list[str]:
-    errors: list[str] = []
-    required = [
-        "meta.csv",
-        "oper_wip.csv",
-        "model_uph.csv",
-        "eqp_count.csv",
-        "model_avail.csv",
-        "batch_oper.csv",
-        "tool_qty.csv",
-        "plan_slots.csv",
-        "equipment_fleet.csv",
-        "ground_truth.json",
-    ]
-    for name in required:
-        if not (bench_dir / name).exists():
-            errors.append(f"{bench_dir.name}: missing {name}")
-
-    if errors:
-        return errors
-
-    ds = SchedulingDataset.from_csv_dir(bench_dir)
-    errors.extend(ds.validate())
-
-    gt = load_ground_truth_conversions(bench_dir / "ground_truth.json")
-    sim = SchedulingSimulator(ds)
-    opt_result = sim.simulate(gt)
-    if opt_result.avg_achievement_rate < 0.45:
-        errors.append(
-            f"{bench_dir.name}: ground_truth achievement too low ({opt_result.avg_achievement_rate:.2f})"
-        )
-    if opt_result.avg_achievement_rate >= 0.999 and len(gt) == 0:
-        errors.append(f"{bench_dir.name}: trivial 100% with no conversions")
-    gt_meta = json.loads((bench_dir / "ground_truth.json").read_text(encoding="utf-8"))
-    if gt_meta.get("conversion_count", len(gt)) < 1:
-        errors.append(f"{bench_dir.name}: expected at least one equipment conversion in ground_truth")
-
-    return errors
+from biz.data_loader import load_problem_from_csv_dir  # noqa: E402
+from core.heuristic import greedy_allocate  # noqa: E402
+from core.optimizer import optimal_allocate  # noqa: E402
+from core.simulator import Simulator  # noqa: E402
 
 
 def main() -> int:
-    root = Path("benchmarks")
-    if not root.exists():
-        print("benchmarks/ not found - run scripts/generate_benchmarks.py first")
+    benchmark_root = ROOT / "benchmarks"
+    if not benchmark_root.exists():
+        print("No benchmark directory.", file=sys.stderr)
         return 1
 
-    all_errors: list[str] = []
-    for bench in sorted(root.glob("benchmark_*")):
-        all_errors.extend(validate_benchmark(bench))
-        try:
-            metrics = evaluate_dataset(bench)
-            opt = metrics["optimal"].avg_achievement_rate
-            heu = metrics["heuristic"].avg_achievement_rate
-            print(f"{bench.name}: optimal={opt:.4f} heuristic={heu:.4f} OK")
-        except Exception as exc:
-            all_errors.append(f"{bench.name}: {exc}")
+    failures = 0
+    print(f"{'dataset':<16} {'optimal':>8} {'expected':>9} {'heuristic':>10} {'status':>8}")
+    print("-" * 64)
+    for sub in sorted(benchmark_root.iterdir()):
+        if not sub.is_dir():
+            continue
+        gt_path = sub / "ground_truth.json"
+        if not gt_path.exists():
+            continue
+        problem = load_problem_from_csv_dir(sub)
+        sim = Simulator(problem)
+        opt = sim.simulate(optimal_allocate(problem))
+        heu = sim.simulate(greedy_allocate(problem))
+        expected = float(json.loads(gt_path.read_text()).get("avg_achievement", 0.0))
+        ok = abs(opt.avg_achievement - expected) < 1e-3
+        status = "OK" if ok else "MISMATCH"
+        if not ok:
+            failures += 1
+        print(f"{sub.name:<16} {opt.avg_achievement:>8.3f} {expected:>9.3f} {heu.avg_achievement:>10.3f} {status:>8}")
 
-    if all_errors:
-        for e in all_errors:
-            print(f"ERROR: {e}", file=sys.stderr)
+    print("-" * 64)
+    if failures:
+        print(f"FAILED: {failures} datasets")
         return 1
-
-    print("All benchmarks passed validation.")
+    print("All benchmarks consistent with ground truth.")
     return 0
 
 

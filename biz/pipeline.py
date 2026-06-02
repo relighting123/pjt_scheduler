@@ -1,177 +1,165 @@
-"""Train/infer orchestration using core + optional Oracle."""
-
+"""End-to-end orchestration: load -> simulate/train/infer -> persist + report."""
 from __future__ import annotations
 
-import random
+import json
 from pathlib import Path
+from typing import List, Optional
 
-from core.domain import SchedulingDataset
-from core.evaluation import (
-    evaluate_all_benchmark_datasets,
-    evaluate_dataset,
-    render_html_report,
-    update_benchmark_markdown,
+from core.domain import SchedulingProblem
+from core.evaluation import evaluate_all_benchmark_datasets
+from core.heuristic import greedy_allocate
+from core.report import render_html, render_markdown
+from core.rl_infer import infer as rl_infer
+
+from .data_loader import (
+    latest_rule_timekey,
+    list_rule_timekeys,
+    load_problem_from_csv_dir,
+    load_problem_from_oracle,
 )
-from core.rl.trainer import infer_conversions, train_with_imitation_then_ppo
+from .output_writer import build_conversion_rows, write_csv, write_oracle
 
 
-def _load_settings():
-    import json
-
-    return json.loads(Path("config/settings.json").read_text(encoding="utf-8"))
+def load_settings(path: str | Path) -> dict:
+    return json.loads(Path(path).read_text())
 
 
-def _datasets_from_benchmark(benchmark_dir: str | Path) -> SchedulingDataset:
-    return SchedulingDataset.from_csv_dir(benchmark_dir)
+# ---------------------------------------------------------------------------
+def _connect(settings: dict):
+    from core.db import connect
+    o = settings["oracle"]
+    return connect(user=o["user"], password=o["password"], dsn=o["dsn"])
 
 
-def _datasets_from_db(from_key: str, to_key: str) -> list[SchedulingDataset]:
-    from biz.oracle_repo import fetch_timekeys_in_range, load_dataset_from_db
-
-    keys = fetch_timekeys_in_range(from_key, to_key)
-    if not keys:
-        keys = [from_key]
-    return [load_dataset_from_db(k) for k in keys]
-
-
-def run_training(
-    from_rule_timekey: str | None = None,
-    to_rule_timekey: str | None = None,
-    rule_timekey: str | None = None,
-    benchmark_dataset: str | None = None,
-    steps: int = 50_000,
-    run_test_eval: bool = True,
-) -> Path:
-    settings = _load_settings()
-    imitation_epochs = settings.get("training", {}).get("imitation_epochs", 20)
-    model_dir = settings.get("artifacts", {}).get("model_dir", "artifacts/models")
-
+def _problems_for_training(
+    settings: dict,
+    from_timekey: Optional[str],
+    to_timekey: Optional[str],
+    rule_timekey: Optional[str],
+    benchmark_dataset: Optional[str],
+) -> List[SchedulingProblem]:
     if benchmark_dataset:
-        ds_list = [_datasets_from_benchmark(benchmark_dataset)]
-    else:
-        fk = from_rule_timekey or rule_timekey
-        tk = to_rule_timekey or rule_timekey or fk
-        if not fk:
-            raise ValueError("Specify --from-timekey/--to-timekey, --timekey, or --benchmark-dataset")
-        if fk == tk:
-            try:
-                ds_list = _datasets_from_db(fk, tk)
-            except Exception:
-                ds_list = [_datasets_from_benchmark(f"benchmarks/benchmark_01")]
-        else:
-            try:
-                ds_list = _datasets_from_db(fk, tk)
-            except Exception:
-                bench_root = Path("benchmarks")
-                ds_list = [SchedulingDataset.from_csv_dir(p) for p in sorted(bench_root.glob("benchmark_*"))[:3]]
-
-    model_path = train_with_imitation_then_ppo(
-        ds_list,
-        total_timesteps=steps,
-        imitation_epochs=imitation_epochs,
-        model_dir=model_dir,
-    )
-
-    if run_test_eval:
-        _run_benchmark_eval(model_dir)
-
-    return model_path
-
-
-def _run_benchmark_eval(model_dir: str):
-    model_path = Path(model_dir) / "ppo_scheduling"
-
-    def loader(bench_dir: Path):
-        ds = SchedulingDataset.from_csv_dir(bench_dir)
-        return infer_conversions(ds, model_path)
-
-    results = evaluate_all_benchmark_datasets("benchmarks", policy_loader=loader)
-    update_benchmark_markdown(results)
-    settings = _load_settings()
-    report_dir = settings.get("artifacts", {}).get("report_dir", "artifacts/reports")
-    render_html_report(results, Path(report_dir) / "benchmark_report.html")
-
-
-def run_inference(
-    rule_timekey: str | None = None,
-    benchmark_dataset: str | None = None,
-    output: str | None = None,
-) -> Path:
-    settings = _load_settings()
-    model_dir = Path(settings.get("artifacts", {}).get("model_dir", "artifacts/models"))
-    model_path = model_dir / "ppo_scheduling"
-
-    if benchmark_dataset:
-        dataset = _datasets_from_benchmark(benchmark_dataset)
-        rtk = dataset.rule_timekey
-    else:
-        rtk = rule_timekey
-        if not rtk:
-            try:
-                from biz.oracle_repo import fetch_max_timekey
-
-                rtk = fetch_max_timekey()
-            except Exception:
-                rtk = "2026051707000000"
-        try:
-            from biz.oracle_repo import load_dataset_from_db
-
-            dataset = load_dataset_from_db(rtk)
-        except Exception:
-            dataset = SchedulingDataset.from_csv_dir("benchmarks/benchmark_01")
-            rtk = dataset.rule_timekey
-
-    conversions = infer_conversions(dataset, model_path)
-    out_path = Path(output or settings.get("artifacts", {}).get("inference_dir", "artifacts/inference") + "/allocation.csv")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    df = dataset.to_conversions_df(conversions)
-    df.to_csv(out_path, index=False)
-
+        return [load_problem_from_csv_dir(benchmark_dataset)]
+    if not (from_timekey or to_timekey or rule_timekey):
+        raise ValueError("Provide --from-timekey/--to-timekey, --timekey, or --benchmark-dataset.")
+    if rule_timekey:
+        from_timekey = from_timekey or rule_timekey
+        to_timekey = to_timekey or rule_timekey
+    conn = _connect(settings)
     try:
-        from biz.oracle_repo import save_conversions
+        table = settings["oracle"]["source_table"]
+        keys = list_rule_timekeys(conn, table, from_timekey, to_timekey)
+        if not keys:
+            return []
+        groups = settings.get("tool_groups", {})
+        return [load_problem_from_oracle(conn, table, k, groups) for k in keys]
+    finally:
+        conn.close()
 
-        save_conversions(conversions, rtk)
-    except Exception:
-        pass
 
-    return out_path
+def run_train(
+    settings: dict,
+    from_timekey: Optional[str] = None,
+    to_timekey: Optional[str] = None,
+    rule_timekey: Optional[str] = None,
+    benchmark_dataset: Optional[str] = None,
+    steps: Optional[int] = None,
+) -> dict:
+    from core.rl_train import train
 
+    problems = _problems_for_training(settings, from_timekey, to_timekey, rule_timekey, benchmark_dataset)
+    if not problems:
+        raise RuntimeError("No training problems found for the given range.")
 
-def run_inference_all_benchmarks(
-    benchmarks_root: str | Path = "benchmarks",
-    output_dir: str | Path | None = None,
-    report_path: str | Path | None = None,
-    model_path: str | Path | None = None,
-) -> tuple[Path, dict[str, Path]]:
-    """Run inference on every benchmark, save CSVs, and write HTML summary."""
-    settings = _load_settings()
-    bench_root = Path(benchmarks_root)
-    out_dir = Path(
-        output_dir or settings.get("artifacts", {}).get("inference_dir", "artifacts/inference")
+    model_cfg = settings["model"]
+    reward_cfg = settings.get("reward", {})
+    save_path = train(
+        problems=problems,
+        artifact_dir=model_cfg["artifact_dir"],
+        policy_name=model_cfg["policy_name"],
+        imitation_epochs=int(model_cfg.get("imitation_epochs", 30)),
+        ppo_total_steps=int(steps or model_cfg.get("ppo_total_steps", 50000)),
+        ppo_n_steps=int(model_cfg.get("ppo_n_steps", 512)),
+        ppo_batch_size=int(model_cfg.get("ppo_batch_size", 64)),
+        ppo_learning_rate=float(model_cfg.get("ppo_learning_rate", 3e-4)),
+        ppo_gamma=float(model_cfg.get("ppo_gamma", 0.99)),
+        switch_penalty=float(reward_cfg.get("switch_penalty", 0.02)),
+        achievement_weight=float(reward_cfg.get("achievement_weight", 1.0)),
+        seed=int(model_cfg.get("seed", 7)),
     )
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    model = Path(model_path or settings.get("artifacts", {}).get("model_dir", "artifacts/models")) / "ppo_scheduling"
+    # benchmark + reports
+    bench = settings.get("benchmark", {})
+    results = evaluate_all_benchmark_datasets(bench.get("dataset_root", "benchmarks"), model_path=save_path)
+    html_path = render_html(results, bench.get("report_path", "artifacts/reports/benchmark.html"))
+    md_path = render_markdown(results, bench.get("summary_md", "MODEL_BENCHMARK.md"))
+    return {
+        "model_path": save_path,
+        "report_html": html_path,
+        "report_md": md_path,
+        "n_problems": len(problems),
+        "n_benchmarks": len(results),
+    }
 
-    csv_paths: dict[str, Path] = {}
-    csv_links: dict[str, str] = {}
-    results = {}
 
-    for bench_dir in sorted(bench_root.glob("benchmark_*")):
-        if not bench_dir.is_dir():
-            continue
-        name = bench_dir.name
-        dataset = SchedulingDataset.from_csv_dir(bench_dir)
-        conversions = infer_conversions(dataset, model)
-        csv_out = out_dir / f"{name}_allocation.csv"
-        dataset.to_conversions_df(conversions).to_csv(csv_out, index=False)
-        csv_paths[name] = csv_out
-        csv_links[name] = csv_out.as_posix()
-        results[name] = evaluate_dataset(bench_dir, policy_conversions=conversions, policy_name="RL")
-    update_benchmark_markdown(results)
+# ---------------------------------------------------------------------------
+def run_infer(
+    settings: dict,
+    rule_timekey: Optional[str] = None,
+    benchmark_dataset: Optional[str] = None,
+    output_csv: Optional[str] = None,
+) -> dict:
+    model_cfg = settings["model"]
+    model_path = str(Path(model_cfg["artifact_dir"]) / f"{model_cfg['policy_name']}.zip")
 
-    report_dir = settings.get("artifacts", {}).get("report_dir", "artifacts/reports")
-    html_out = Path(report_path or Path(report_dir) / "inference_summary.html")
-    render_html_report(results, html_out, csv_links=csv_links)
+    if benchmark_dataset:
+        problem = load_problem_from_csv_dir(benchmark_dataset)
+        allocation = rl_infer(problem, model_path=model_path)
+        rows = build_conversion_rows(problem.rule_timekey, None, allocation)
+        if not output_csv:
+            output_csv = str(Path("artifacts/inference") / f"{problem.rule_timekey}.csv")
+        write_csv(output_csv, rows)
+        return {"mode": "benchmark", "rule_timekey": problem.rule_timekey, "rows": len(rows), "output": output_csv}
 
-    return html_out, csv_paths
+    conn = _connect(settings)
+    try:
+        oracle = settings["oracle"]
+        rk = rule_timekey or latest_rule_timekey(conn, oracle["source_table"])
+        if not rk:
+            raise RuntimeError("No RULE_TIMEKEY found in source table.")
+        problem = load_problem_from_oracle(conn, oracle["source_table"], rk, settings.get("tool_groups", {}))
+        allocation = rl_infer(problem, model_path=model_path)
+        # previous snapshot for diff (latest prior RULE_TIMEKEY)
+        prev_keys = list_rule_timekeys(conn, oracle["source_table"], "00000000000000", rk)
+        previous_alloc = None  # the system persists conversion rows, not prior allocations
+        rows = build_conversion_rows(rk, previous_alloc, allocation)
+        write_oracle(
+            conn,
+            output_table=oracle["output_table"],
+            history_table=oracle.get("history_table", ""),
+            rule_timekey=rk,
+            rows=rows,
+        )
+        return {"mode": "oracle", "rule_timekey": rk, "rows": len(rows)}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+def run_eval(settings: dict) -> dict:
+    model_cfg = settings["model"]
+    bench = settings.get("benchmark", {})
+    model_path = str(Path(model_cfg["artifact_dir"]) / f"{model_cfg['policy_name']}.zip")
+    if not Path(model_path).exists():
+        model_path = None  # type: ignore
+    results = evaluate_all_benchmark_datasets(bench.get("dataset_root", "benchmarks"), model_path=model_path)
+    html_path = render_html(results, bench.get("report_path", "artifacts/reports/benchmark.html"))
+    md_path = render_markdown(results, bench.get("summary_md", "MODEL_BENCHMARK.md"))
+    return {
+        "report_html": html_path,
+        "report_md": md_path,
+        "n_benchmarks": len(results),
+        "avg_optimal": (sum(r.optimal.avg_achievement for r in results) / len(results)) if results else 0.0,
+        "avg_rl": (sum(r.rl.avg_achievement for r in results) / len(results)) if results else 0.0,
+        "avg_heuristic": (sum(r.heuristic.avg_achievement for r in results) / len(results)) if results else 0.0,
+    }
