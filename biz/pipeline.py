@@ -271,6 +271,8 @@ def _infer_dynamic_first_slot(problem, model_path, settings) -> AllocationSet:
         try:
             from sb3_contrib import MaskablePPO
             from core.rl_env_mp import MultiPeriodDispatchEnv
+            import torch
+            torch.distributions.Distribution.set_default_validate_args(False)
             model = MaskablePPO.load(model_path)
             env = MultiPeriodDispatchEnv(
                 [problem], num_slots=num_slots, slot_hours=slot_hours,

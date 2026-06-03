@@ -17,6 +17,10 @@ def infer(
     try:
         from .rl_env import DispatchEnv
         from .rl_train import load_policy
+        import torch
+        # MaskableCategorical validates before masking; disable global
+        # distribution validation (see core/rl_train.py).
+        torch.distributions.Distribution.set_default_validate_args(False)
     except Exception:
         return greedy_allocate(problem, ignore_wip=ignore_wip)
 

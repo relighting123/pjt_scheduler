@@ -172,6 +172,8 @@ def evaluate_all_benchmark_datasets_dynamic(
     if model_path and Path(model_path).exists():
         try:
             from sb3_contrib import MaskablePPO
+            import torch
+            torch.distributions.Distribution.set_default_validate_args(False)
             rl_model = MaskablePPO.load(model_path)
         except Exception:
             rl_model = None

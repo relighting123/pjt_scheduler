@@ -100,6 +100,8 @@ def train_multiperiod(
         from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
         from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
         import torch
+        # See rl_train.py — MaskableCategorical validates before masking.
+        torch.distributions.Distribution.set_default_validate_args(False)
     except Exception as exc:  # pragma: no cover
         raise RuntimeError(
             "stable-baselines3 + sb3-contrib are required; install pjt_scheduler[rl]."

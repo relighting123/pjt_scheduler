@@ -94,6 +94,12 @@ def train(
         from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
         from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
         import torch
+        # MaskableCategorical's super().__init__ runs validation BEFORE masking;
+        # float32 softmax over 528 dims can be off from 1.0 by ~1e-5 which trips
+        # PyTorch's Simplex check on newer torch (2.12+). Disable global
+        # distribution validation — we control the inputs and masking happens
+        # immediately after construction.
+        torch.distributions.Distribution.set_default_validate_args(False)
     except Exception as exc:  # pragma: no cover
         raise RuntimeError(
             "stable-baselines3 + sb3-contrib are required for training; "
@@ -171,11 +177,15 @@ def train(
 
 
 def load_policy(model_path: str):
-    """Load a saved MaskablePPO policy. Returns None if dependencies missing."""
-    try:
-        from sb3_contrib import MaskablePPO
-    except Exception:
-        return None
+    """Load a saved MaskablePPO policy. Returns None if dependencies missing,
+    file is absent, or the file was produced by an incompatible policy class
+    (e.g. a pre-masking PPO checkpoint left over on disk)."""
     if not os.path.exists(model_path):
         return None
-    return MaskablePPO.load(model_path)
+    try:
+        from sb3_contrib import MaskablePPO
+        import torch
+        torch.distributions.Distribution.set_default_validate_args(False)
+        return MaskablePPO.load(model_path)
+    except Exception:
+        return None
