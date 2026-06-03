@@ -24,7 +24,12 @@ from .simulator import Simulator
 
 
 def _compositions(n: int, k: int):
-    """Yield all weak compositions of n into k non-negative parts."""
+    """정수 n을 k개 비음 정수로 분할하는 모든 약 composition.
+
+    Example:
+        list(_compositions(3, 2))
+        # → [(0,3), (1,2), (2,1), (3,0)]
+    """
     if k == 1:
         yield (n,)
         return
@@ -38,6 +43,26 @@ def optimal_allocate(
     max_units_per_bucket: int = 20,
     ignore_wip: bool = False,
 ) -> AllocationSet:
+    """소규모 문제에 대한 brute-force 최적 할당.
+
+    각 bucket을 적격 target들에 정수 분할하는 모든 경우를 DFS로 탐색해
+    평균 달성률 최대인 할당을 반환. 탐색 공간이 크면 greedy로 폴백.
+
+    Args:
+        problem: 입력 스냅샷.
+        max_units_per_bucket: 단일 bucket이 이 수보다 많으면 greedy 폴백.
+        ignore_wip: True면 WIP cap 무시 (plan-only 모드).
+
+    Returns:
+        AllocationSet — 최적 결정 (또는 greedy 폴백).
+
+    Example:
+        # benchmark_08: T_FAST 1대, T_SLOW 1대; P1과 P2 각 100개 계획
+        alloc = optimal_allocate(problem)
+        # → T_FAST→P2 (희소 옵션 먼저), T_SLOW→P1
+        #   greedy는 T_FAST→P1로 빠져서 P2=0 (avg 0.5)
+        #   optimal은 두 제품 모두 100% (avg 1.0)
+    """
     """Brute-force optimal allocation maximizing average achievement.
 
     Falls back to the greedy heuristic if a bucket exceeds `max_units_per_bucket`

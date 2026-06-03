@@ -11,6 +11,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 def connect(user: str, password: str, dsn: str):
+    """Oracle 연결. oracledb가 설치되어 있어야 함.
+
+    Example:
+        conn = connect("dispatcher", "dispatcher", "localhost:1521/XEPDB1")
+    """
     try:
         import oracledb
     except Exception as exc:  # pragma: no cover
@@ -54,7 +59,14 @@ def replace_table(
     where_clause: str = "1=1",
     where_params: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Atomic replace: DELETE matching rows + INSERT new rows, single commit."""
+    """원자적 replace: 조건 DELETE → INSERT → 단일 commit.
+
+    Example:
+        replace_table(conn, "RTD_CONV_INF",
+                      columns=OUTPUT_COLUMNS, rows=[(...), ...],
+                      where_clause="RULE_TIMEKEY = :rule_timekey",
+                      where_params={"rule_timekey": "2026051707000000"})
+    """
     placeholders = ", ".join(f":{i + 1}" for i in range(len(columns)))
     col_csv = ", ".join(columns)
     delete_sql = f"DELETE FROM {table} WHERE {where_clause}"

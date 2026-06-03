@@ -41,6 +41,24 @@ Policy = Callable[
 
 @dataclass
 class FlowResult:
+    """`MultiPeriodSimulator.run()` 또는 `multiperiod_optimal()`의 출력.
+
+    Fields:
+        avg_achievement: 모든 (pk, op)에 대한 평균 달성률.
+        achievement_by_pko: (pk, op) → 0.0~1.0.
+        produced_by_pko:    (pk, op) → 호라이즌 누적 생산량.
+        total_switches:     슬롯 간 (batch, model) 이동 횟수 총합.
+        schedule:           슬롯별 AllocationSet 리스트 (길이 = num_slots).
+        wip_trace:          각 슬롯 종료 시 WIP 상태 스냅샷.
+
+    Example:
+        FlowResult(
+            avg_achievement=0.875,
+            achievement_by_pko={("P1","OP10"):1.0, ("P2","OP10"):0.5, ...},
+            total_switches=1,
+            schedule=[AllocationSet(...), ...],  # 4개 (num_slots)
+        )
+    """
     avg_achievement: float = 0.0
     achievement_by_pko: Dict[Tuple[str, str], float] = field(default_factory=dict)
     produced_by_pko: Dict[Tuple[str, str], float] = field(default_factory=dict)
@@ -50,6 +68,26 @@ class FlowResult:
 
 
 class MultiPeriodSimulator:
+    """멀티 피리어드 (WIP 흐름 + 전환 비용) 시뮬레이터.
+
+    horizon을 num_slots개로 쪼개고, 각 슬롯의 OP_k 생산이 OP_{k+1}
+    (OPER_SEQ 순)의 WIP로 **다음 슬롯에** 흘러간다 (one-slot latency).
+    배치 변경 시 switch_time_hours 만큼 슬롯 시간을 잃는다.
+
+    Args:
+        problem: 입력 스냅샷.
+        num_slots: 호라이즌 슬롯 수 (예: 4시간 → 4슬롯).
+        slot_hours: 슬롯당 시간 (기본 1시간).
+        switch_time_hours: 신규 (batch, model)로 이동하는 장비 1대당 셋업 시간.
+
+    Example:
+        sim = MultiPeriodSimulator(problem, num_slots=4, slot_hours=1.0,
+                                   switch_time_hours=0.5)
+        result = sim.run(dynamic_greedy_policy)
+        print(result.avg_achievement)  # 0.625
+        print(result.total_switches)   # 3
+    """
+
     def __init__(
         self,
         problem: SchedulingProblem,
@@ -150,14 +188,25 @@ class MultiPeriodSimulator:
 
 # --- policies --------------------------------------------------------------
 def static_policy(problem, wip, remaining_plan, prev_alloc, slot) -> AllocationSet:
-    """Phase-1 behaviour: decide once from the initial state, hold it forever."""
+    """Phase-1 정책: 첫 슬롯에 한 번 결정하고 모든 슬롯 동일 유지.
+
+    Example:
+        sim.run(static_policy)
+        # build-ahead 시나리오에서 OP10만 계속 → OP20=0 → avg 0.5
+    """
     if prev_alloc is not None:
         return prev_alloc
     return greedy_allocate(problem, wip_override=wip, treat_zero_as_unlimited=False)
 
 
 def dynamic_greedy_policy(problem, wip, remaining_plan, prev_alloc, slot) -> AllocationSet:
-    """Re-run greedy each slot against the live WIP queue and remaining plan."""
+    """슬롯마다 현재 (실시간) WIP/잔여계획 기반으로 greedy 재실행.
+
+    Example:
+        sim.run(dynamic_greedy_policy)
+        # build-ahead: slot 0 OP10 → slot 1 OP20 (WIP 채워졌으니) → avg 1.0
+        # thrashing : slot마다 batch 바뀌어 전환 비용 ↑ → avg 0.625 (3 swaps)
+    """
     return greedy_allocate(
         problem,
         wip_override=wip,
@@ -174,12 +223,26 @@ def multiperiod_optimal(
     switch_time_hours: float = 0.0,
     max_search: int = 20000,
 ) -> FlowResult:
-    """Exact optimum for small instances by DFS over per-slot "pure" allocations.
+    """소규모 인스턴스에 대한 멀티 피리어드 정확해 (슬롯별 "pure" 할당 DFS).
 
-    At each slot every equipment bucket is assigned wholly to one eligible
-    operation (or idled). This enumerates the true optimum when buckets hold a
-    single unit (the demonstrator case) and a strong lower bound otherwise. For
-    anything larger it falls back to the dynamic-greedy policy.
+    매 슬롯 각 bucket을 적격 op 1개에 통째로 배정 (또는 idle). bucket이
+    1대일 때 진정한 최적해, 그 외엔 강한 하한. 탐색 공간 큰 경우
+    dynamic_greedy_policy로 폴백.
+
+    Args:
+        problem: 입력 스냅샷.
+        num_slots / slot_hours / switch_time_hours: 시뮬레이션 파라미터.
+        max_search: 슬롯별 조합 수 ^ num_slots가 이를 넘으면 폴백.
+
+    Returns:
+        FlowResult — 최적 일정 + 누적 산출/달성률/전환수.
+
+    Example:
+        # thrashing: 4 제품 × 2 배치 × 1대 장비 × 4슬롯
+        opt = multiperiod_optimal(problem, num_slots=4, slot_hours=1.0,
+                                  switch_time_hours=0.5)
+        # → schedule = [P1, P3, P2, P4]  (배치 A,A,B,B 묶음, 전환 1회)
+        #   avg_achievement = 0.875
     """
     pool = list(problem.equipment_pool().items())  # [((batch, model), qty), ...]
     targets = [(pk, op) for pk, op, _ in problem.plan_targets()]

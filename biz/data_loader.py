@@ -47,7 +47,21 @@ def _read_csv(path: Path) -> List[Dict[str, str]]:
 
 
 def load_problem_from_csv_dir(directory: Path | str) -> SchedulingProblem:
-    """Load a benchmark dataset from a directory containing the 7 CSVs."""
+    """벤치마크 디렉토리(7개 CSV + tool_groups.json)에서 SchedulingProblem 로드.
+
+    Args:
+        directory: 벤치마크 폴더 경로 (e.g. "benchmarks/benchmark_01").
+
+    Returns:
+        SchedulingProblem (rule_timekey = 폴더명).
+
+    Example:
+        problem = load_problem_from_csv_dir("benchmarks/benchmark_01")
+        # 폴더 내용:
+        #   wip_info.csv, uph.csv, equipment.csv, availability.csv,
+        #   tool_group.csv, tool_qty.csv, plan.csv,
+        #   tool_groups.json, ground_truth.json
+    """
     d = Path(directory)
     rule_timekey = d.name
 
@@ -185,7 +199,32 @@ def load_problem_from_oracle(
     rule_timekey: str,
     tool_groups: Optional[Dict[str, List[str]]] = None,
 ) -> SchedulingProblem:
-    """Pivot RTS_LINEDSDB_INF rows for a single RULE_TIMEKEY into the domain."""
+    """Oracle RTS_LINEDSDB_INF의 한 RULE_TIMEKEY를 SchedulingProblem으로 피벗.
+
+    GBN_CD 값에 따라 7개 record 종류로 분류:
+        WIP_QTY → WipRecord
+        UPH     → UphRecord
+        ASSIGN_EQUIP_CNT → EquipmentRecord
+        D0_TARGET_QTY, D1_TARGET_QTY → PlanRecord (합산)
+        TOOL_QTY → ToolQtyRecord
+        availability/tool_group은 UPH 존재 + batch_id 매핑으로 유도.
+
+    Args:
+        conn: oracledb 연결 객체.
+        table: 소스 테이블 명 ("RTS_LINEDSDB_INF").
+        rule_timekey: 조회 시각 키.
+        tool_groups: {그룹명: [batch1, batch2, ...]} (config에서 주입).
+
+    Returns:
+        SchedulingProblem.
+
+    Example:
+        conn = connect("dispatcher", "dispatcher", "localhost:1521/XEPDB1")
+        problem = load_problem_from_oracle(
+            conn, "RTS_LINEDSDB_INF", "2026051707000000",
+            tool_groups={"G001": ["9C/92", "9C/102"]},
+        )
+    """
     from core.db import fetch_all
     rows = fetch_all(conn, _SELECT_SNAPSHOT_SQL.format(table=table), {"rule_timekey": rule_timekey})
     return _rows_to_problem(rule_timekey, rows, tool_groups or {})

@@ -19,16 +19,29 @@ def greedy_allocate(
     treat_zero_as_unlimited: bool = True,
     ignore_wip: bool = False,
 ) -> AllocationSet:
-    """Greedy allocation for one time slice.
+    """단일 슬롯 그리디 할당. 매 반복 (target, bucket)의 marginal 점수가
+    가장 큰 한 쌍을 골라 장비 1대 배정, 잔여 없을 때까지 반복.
+
+    Marginal = min(잔여 plan, UPH, 잔여 WIP).
 
     Args:
-        wip_override / plan_override: per-(plan_prod_key, oper_id) overrides used
-            by the multi-period engine to feed the *current* WIP queue and the
-            *remaining* plan as the horizon advances. When omitted, the static
-            snapshot values from `problem` are used (single-snapshot mode).
-        treat_zero_as_unlimited: single-snapshot mode treats a 0/missing WIP as
-            "unconstrained" (back-compat). The multi-period engine passes False
-            so that 0 means a genuinely empty queue.
+        problem: 입력 스냅샷.
+        wip_override / plan_override: (pk, op)별 WIP/plan을 override.
+            멀티 피리어드 엔진이 매 슬롯 현재 상태로 그리디를 호출할 때 사용.
+            생략 시 problem 안의 정적 값 사용 (single-snapshot 모드).
+        treat_zero_as_unlimited: True면 WIP=0/누락을 "무제한"으로 해석 (단일
+            스냅샷 기본). 멀티 피리어드는 False로 두어 실제 큐 비었음을 표현.
+        ignore_wip: True이면 WIP 자체를 무시 (plan-only 모드).
+
+    Returns:
+        AllocationSet — Greedy 결정.
+
+    Example:
+        problem = load_problem_from_csv_dir("benchmarks/benchmark_01")
+        alloc = greedy_allocate(problem)
+        # AllocationSet(rule_timekey="benchmark_01", allocations=[
+        #     Allocation("9C/92","P1","OP10","T5833", eqp_qty=4),
+        # ])
     """
     pool: Dict[Tuple[str, str], int] = dict(problem.equipment_pool())
     remaining: Dict[Tuple[str, str], float] = {}

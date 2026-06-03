@@ -82,12 +82,35 @@ def train(
     device: str = "auto",
     imitation_loss_target: float = 0.05,
 ) -> str:
-    """Run imitation warm-start + PPO. Returns the path to the saved policy.
+    """Imitation warm-start + MaskablePPO 학습. 저장된 모델 경로 반환.
 
-    Speed knobs:
-      num_envs:   parallel rollout envs (SubprocVecEnv when >1) — 5-8× on CPU.
-      device:     "auto" picks CUDA/MPS when available, else CPU.
-      imitation_loss_target: stop CE early once batch loss drops below this.
+    Workflow:
+      1. greedy 휴리스틱을 teacher로 (obs, action) 쌍 수집
+      2. cross-entropy로 PPO policy 워밍업 (조기 종료 지원)
+      3. MaskablePPO로 ppo_total_steps만큼 추가 학습 (마스킹된 액션만 샘플)
+
+    Args:
+        problems: 학습 스냅샷 리스트.
+        artifact_dir / policy_name: 저장 위치 (→ <dir>/<name>.zip).
+        imitation_epochs: CE 최대 epoch 수.
+        ppo_total_steps: PPO 추가 학습 step (0이면 imitation만).
+        num_envs: SubprocVecEnv 병렬 환경 수 (CPU 가속).
+        device: "auto"/"cpu"/"cuda"/"mps".
+        imitation_loss_target: CE loss가 이 값보다 작으면 조기 종료.
+        switch_penalty / achievement_weight: 환경의 reward 계수.
+        ignore_wip: True면 plan-only 모드 환경으로 학습.
+
+    Returns:
+        저장된 모델 .zip 경로 (str).
+
+    Example:
+        save = train(
+            problems=[problem1, ...],
+            artifact_dir="artifacts/models", policy_name="ppo_dispatch_wip_static",
+            imitation_epochs=200, ppo_total_steps=50000,
+            num_envs=4, device="auto",
+        )
+        # → "artifacts/models/ppo_dispatch_wip_static.zip"
     """
     try:
         from sb3_contrib import MaskablePPO

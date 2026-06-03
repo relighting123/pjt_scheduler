@@ -95,6 +95,30 @@ def train_multiperiod(
     device: str = "auto",
     imitation_loss_target: float = 0.05,
 ) -> str:
+    """멀티 피리어드 MaskablePPO 학습 (teacher = multiperiod_optimal).
+
+    각 problem에 대해 multiperiod_optimal로 슬롯별 최적 일정을 구해 env에
+    리플레이하고, 그 (obs, action) 쌍으로 cross-entropy 워밍업 후 PPO 추가.
+
+    Args:
+        problems: 학습 스냅샷 리스트.
+        num_slots / slot_hours / switch_time_hours: 멀티 피리어드 설정.
+        artifact_dir / policy_name: 저장 위치.
+        ppo_total_steps: 0이면 imitation only (작은 데모는 0 권장).
+        imitation_loss_target: CE loss 임계 (조기 종료).
+
+    Returns:
+        저장된 .zip 경로.
+
+    Example:
+        save = train_multiperiod(
+            problems=[build_thrashing_problem()],
+            num_slots=4, slot_hours=1.0, switch_time_hours=0.5,
+            artifact_dir="artifacts/models", policy_name="ppo_mp_thrashing",
+            imitation_epochs=1500, ppo_total_steps=0,
+        )
+        # → 0.875 평균 달성률 (optimal과 동일) 달성
+    """
     try:
         from sb3_contrib import MaskablePPO
         from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy

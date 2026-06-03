@@ -26,7 +26,26 @@ except Exception:  # pragma: no cover
 
 
 class DispatchEnv(gym.Env if gym is not None else object):
-    """Single-snapshot dispatch environment."""
+    """단일 스냅샷 dispatch RL 환경 (Gymnasium).
+
+    한 episode = 한 SchedulingProblem에 대한 substep 시퀀스. 매 substep마다
+    PPO가 (bucket_idx, target_idx) 또는 NO-OP를 선택해 장비 1대를 배정.
+    모든 bucket 소진 or NO-OP에서 episode 종료, 시뮬레이션 평균 달성률이
+    누적 reward의 근사값.
+
+    Action space: Discrete(MAX_BUCKETS × (MAX_TARGETS + 1)) = 528.
+        action = bucket_idx × 33 + target_idx  (target_idx == 32 → NO-OP)
+
+    Observation: bucket_free(16) + shortfall(32) + uph_matrix(16×32) = 560 dim.
+
+    Example:
+        env = DispatchEnv([problem1, problem2], switch_penalty=0.02, seed=7)
+        obs, _ = env.reset()
+        mask = env.action_masks()  # MaskablePPO 용
+        action, _ = model.predict(obs, deterministic=True, action_masks=mask)
+        obs, reward, term, trunc, info = env.step(int(action))
+        alloc = env.current_allocation()
+    """
 
     metadata = {"render_modes": []}
 

@@ -14,6 +14,24 @@ from .domain import AllocationSet, SchedulingProblem
 
 @dataclass
 class SimulationResult:
+    """`Simulator.simulate()`의 출력.
+
+    Fields:
+        produced_by_pko: (pk, op) → 실제 생산량 (WIP cap 적용 후)
+        plan_by_pko:     (pk, op) → 계획량
+        achievement_by_pko: (pk, op) → 달성률 (0.0~1.0)
+        avg_achievement: 단순 평균 달성률
+        over_allocations: 풀 초과 할당 경고 메시지
+
+    Example:
+        SimulationResult(
+            produced_by_pko={("P1","OP10"): 600.0, ("P1","OP20"): 50.0},
+            plan_by_pko    ={("P1","OP10"): 600.0, ("P1","OP20"): 200.0},
+            achievement_by_pko={("P1","OP10"): 1.0, ("P1","OP20"): 0.25},
+            avg_achievement=0.625,
+            over_allocations=[],
+        )
+    """
     produced_by_pko: Dict[Tuple[str, str], float] = field(default_factory=dict)
     plan_by_pko: Dict[Tuple[str, str], float] = field(default_factory=dict)
     achievement_by_pko: Dict[Tuple[str, str], float] = field(default_factory=dict)
@@ -25,12 +43,21 @@ class SimulationResult:
 
 
 class Simulator:
-    """Horizon-agnostic single-step production simulator.
+    """단일 스냅샷 (지평 = horizon_hours) 생산 시뮬레이터.
 
-    The plan covers a fixed horizon (per RULE_TIMEKEY). UPH is per hour and the
-    horizon is normalized to 1.0 — benchmarks express PLAN_QTY in the same unit
-    so the comparison is consistent. Sub-hour horizons can be reflected by
-    scaling PLAN_QTY in biz layer.
+    하나의 `SchedulingProblem`과 `AllocationSet`을 받아 (pk, op)별 실제
+    생산량과 평균 달성률을 계산. RL 보상 신호 및 벤치마크 평가 지표의 근원.
+
+    Args:
+        problem: 입력 스냅샷.
+        horizon_hours: 계획 지평 (기본 1시간). UPH × eqp × horizon = 산출.
+        ignore_wip: True이면 WIP cap을 무시 (plan-only 모드).
+
+    Example:
+        sim = Simulator(problem, horizon_hours=1.0)
+        result = sim.simulate(allocation)
+        print(result.avg_achievement)   # 0.875
+        print(result.achievement_by_pko[("P1","OP10")])  # 1.0
     """
 
     def __init__(self, problem: SchedulingProblem, horizon_hours: float = 1.0, ignore_wip: bool = False) -> None:
@@ -39,6 +66,21 @@ class Simulator:
         self.ignore_wip = bool(ignore_wip)
 
     def simulate(self, allocations: AllocationSet) -> SimulationResult:
+        """할당 결정에 대한 시뮬레이션 실행.
+
+        Args:
+            allocations: 평가할 할당 결정.
+
+        Returns:
+            SimulationResult — 모든 (pk, op)에 대한 생산량/달성률.
+
+        Example:
+            allocation = AllocationSet("...", [
+                Allocation("9C/92","P1","OP10","T5833", eqp_qty=3),
+            ])
+            result = sim.simulate(allocation)
+            # → produced=600 (= 200uph × 3대), achievement=1.0
+        """
         problem = self.problem
         result = SimulationResult()
         result.plan_by_pko = {(pk, op): qty for pk, op, qty in problem.plan_targets()}
@@ -86,10 +128,25 @@ class Simulator:
 
 
 def count_switches(previous: AllocationSet | None, current: AllocationSet) -> int:
-    """Count tool conversions vs. previous allocation.
+    """이전 할당 대비 tool 전환 수 계산.
 
-    A switch is a (batch, model) pair whose equipment count increased compared
-    to the previous snapshot — i.e. equipment moved into this batch.
+    (batch, model) 쌍의 장비 수가 이전보다 증가했으면 그만큼 전환으로 간주.
+    동일 batch_id 내에서는 plan_prod_key 변경은 전환 아님.
+
+    Args:
+        previous: 이전 스냅샷의 AllocationSet 또는 None (첫 슬롯).
+        current: 현재 AllocationSet.
+
+    Returns:
+        총 전환 횟수 (int).
+
+    Example:
+        prev = AllocationSet("...", [Allocation("9C/92","P1","OP10","T5833",2)])
+        curr = AllocationSet("...", [
+            Allocation("9C/92","P1","OP10","T5833",1),
+            Allocation("9C/102","P2","OP10","T5833",1),  # batch 바뀜
+        ])
+        count_switches(prev, curr)  # → 1
     """
     if previous is None:
         return 0

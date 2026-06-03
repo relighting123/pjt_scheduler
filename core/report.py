@@ -48,6 +48,18 @@ def _fmt_delta(a: float, b: float) -> str:
 
 
 def render_html(results: List[BenchmarkEvalResult], output_path: str) -> str:
+    """벤치마크 평가 결과를 HTML 리포트로 렌더링.
+
+    Args:
+        results: evaluate_all_benchmark_datasets[_dynamic]의 출력.
+        output_path: 출력 HTML 경로.
+
+    Returns:
+        출력 경로 (str).
+
+    Example:
+        render_html(results, "artifacts/reports/benchmark_wip_static.html")
+    """
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     if not results:
         Path(output_path).write_text("<html><body><p>No benchmark results.</p></body></html>")
@@ -123,6 +135,11 @@ def render_html(results: List[BenchmarkEvalResult], output_path: str) -> str:
 
 
 def render_markdown(results: List[BenchmarkEvalResult], output_path: str) -> str:
+    """평가 결과를 MODEL_BENCHMARK_<mode>.md 형식으로 출력.
+
+    Example:
+        render_markdown(results, "MODEL_BENCHMARK_wip_static.md")
+    """
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     if not results:
         Path(output_path).write_text("# Model Benchmark\n\n_No benchmark results yet._\n")
