@@ -160,6 +160,50 @@ GRANT SELECT, INSERT ON RTD_CONV_HIS TO <운영계정>;
 **보안 권장**: 비밀번호는 운영에서 환경 변수로 빼고 launcher 스크립트가
 주입. 현재 코드는 평문 JSON 직접 읽음.
 
+### 3-1. 사용자 정의 입력 쿼리 (선택)
+
+기본은 `source_table` 한 테이블을 직접 SELECT. 회사 환경에 따라 뷰/조인/
+파티션 필터 등이 필요하면 **사용자가 작성한 SQL을 그대로 바인딩**해서
+쓸 수 있다. `oracle` 섹션에 다음 세 키를 추가:
+
+```json
+{
+  "oracle": {
+    "user": "...",
+    "password": "...",
+    "dsn": "...",
+    "source_table": "",
+    "output_table": "RTD_CONV_INF",
+    "history_table": "RTD_CONV_HIS",
+
+    "source_query": "SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ, EQP_MODEL_CD, GBN_CD, ATTR_VAL FROM MY_PIVOT_VIEW WHERE RULE_TIMEKEY = :rule_timekey AND FAC_ID = 'ICPRB'",
+
+    "range_keys_query": "SELECT DISTINCT RULE_TIMEKEY FROM MY_PIVOT_VIEW WHERE RULE_TIMEKEY BETWEEN :from_key AND :to_key AND FAC_ID = 'ICPRB' ORDER BY RULE_TIMEKEY",
+
+    "latest_key_query": "SELECT MAX(RULE_TIMEKEY) FROM MY_PIVOT_VIEW WHERE FAC_ID = 'ICPRB' AND GBN_CD = 'WIP_QTY'"
+  }
+}
+```
+
+규칙:
+
+- 세 키는 **선택**. 미지정/`null`이면 기본 SELECT 사용 (=`source_table` 직접).
+- 세 키를 정의하면 `source_table` 값은 무시되어도 무방 (빈 문자열 OK).
+- **bind 변수명 고정**: `:rule_timekey`, `:from_key`, `:to_key`를 그대로 사용.
+- `source_query`는 반드시 다음 8개 컬럼을 **이 순서**로 반환:
+    `RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
+     EQP_MODEL_CD, GBN_CD, ATTR_VAL`
+- `range_keys_query`는 `RULE_TIMEKEY` 단일 컬럼 반환.
+- `latest_key_query`는 단일 값 (MAX) 반환.
+- 세 쿼리 중 일부만 override 가능 (예: source_query만 정의하고
+  range/latest는 기본 사용).
+
+전형적인 활용:
+
+- FAC_ID/CO_DIV 등으로 다중 라인을 한 테이블에 두고 라인별 필터.
+- 여러 ETL 테이블을 JOIN해서 캐노니컬 8컬럼 형태로 만들어 공급.
+- 파티션 힌트, MATERIALIZED VIEW 사용 등 성능 튜닝.
+
 ---
 
 ## 4. 연결 점검
