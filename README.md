@@ -202,7 +202,8 @@ python run.py eval --mode all   # plan-only + wip-static + dynamic 나란히, �
 - `core`: domain model, simulator, optimizer, evaluation, optional RL training interface.
 - `biz`: Oracle/config adapters that map real tables into core datasets and persist output tables.
 - `benchmarks`: 11 CSV benchmark datasets plus `ground_truth.json` for DB-free validation.
-- `config/settings.json`: Oracle connection and output table/model artifact settings.
+- `config/settings.json`: Oracle 접속·`query_dir`·모델 경로 등 (테이블/SQL은
+  **포함하지 않음** — 입출력 SQL은 `config/queries/*.sql`).
 
 Optional packages:
 
