@@ -306,7 +306,7 @@ python3 run.py infer --mode dynamic
 1. **차원 절단** — 라인 사이즈가 §0의 상한을 넘으면 silent truncation.
    배포 전 반드시 측정 + 필요 시 상한 상향 + 재학습.
 2. **WIP 의미** — `wip-static` 모드에서 WIP=0/누락은 "무제한"으로 해석됨
-   (`treat_zero_as_unlimited=True`, `core/heuristic.py`).
+   (`treat_zero_as_unlimited=True`, `core/policy/heuristic.py`).
    실제 빈 큐를 표현하려면 `dynamic` 모드 사용.
 3. **벤치마크 한계** — `benchmarks/` 11개는 데모용. 실제 일반화는
    회사 DB의 다양한 스냅샷 구간으로 학습해야 가능.
