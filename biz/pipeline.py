@@ -79,12 +79,18 @@ def _problems_for_training(
         to_timekey = to_timekey or rule_timekey
     conn = _connect(settings)
     try:
-        table = settings["oracle"]["source_table"]
-        keys = list_rule_timekeys(conn, table, from_timekey, to_timekey)
+        oracle_cfg = settings["oracle"]
+        table = oracle_cfg.get("source_table", "")
+        snapshot_sql = oracle_cfg.get("source_query")
+        range_sql = oracle_cfg.get("range_keys_query")
+        keys = list_rule_timekeys(conn, table, from_timekey, to_timekey, custom_sql=range_sql)
         if not keys:
             return []
         groups = settings.get("tool_groups", {})
-        return [load_problem_from_oracle(conn, table, k, groups) for k in keys]
+        return [
+            load_problem_from_oracle(conn, table, k, groups, custom_sql=snapshot_sql)
+            for k in keys
+        ]
     finally:
         conn.close()
 
@@ -267,10 +273,17 @@ def run_infer(
     conn = _connect(settings)
     try:
         oracle = settings["oracle"]
-        rk = rule_timekey or latest_rule_timekey(conn, oracle["source_table"])
+        latest_sql = oracle.get("latest_key_query")
+        snapshot_sql = oracle.get("source_query")
+        rk = rule_timekey or latest_rule_timekey(
+            conn, oracle.get("source_table", ""), custom_sql=latest_sql,
+        )
         if not rk:
             raise RuntimeError("No RULE_TIMEKEY found in source table.")
-        problem = load_problem_from_oracle(conn, oracle["source_table"], rk, settings.get("tool_groups", {}))
+        problem = load_problem_from_oracle(
+            conn, oracle.get("source_table", ""), rk,
+            settings.get("tool_groups", {}), custom_sql=snapshot_sql,
+        )
         allocation = _infer_one(problem, model_path, mode, settings)
         rows = build_conversion_rows(rk, None, allocation)
         write_oracle(
