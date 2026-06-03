@@ -99,6 +99,25 @@ def run_train(
     steps: Optional[int] = None,
     mode: Optional[str] = None,
 ) -> dict:
+    """선택한 모드의 학습 파이프라인. 학습 후 벤치마크 평가까지 수행.
+
+    Args:
+        settings: settings.json 로드 결과.
+        from_timekey / to_timekey / rule_timekey: Oracle 구간 (또는 단일 키).
+        benchmark_dataset: 벤치마크 CSV 폴더 (DB 대신).
+        steps: PPO total steps override.
+        mode: plan-only | wip-static | dynamic ('all'은 학습에선 불가).
+
+    Returns:
+        {"mode", "model_path", "n_problems",
+         "report_html", "report_md", "n_benchmarks",
+         "avg_optimal", "avg_rl", "avg_heuristic"}
+
+    Example:
+        result = run_train(load_settings("config/settings.json"),
+                           benchmark_dataset="benchmarks/benchmark_01",
+                           steps=50000, mode="wip-static")
+    """
     mode = resolve_mode(settings, mode)
     problems = _problems_for_training(settings, from_timekey, to_timekey, rule_timekey, benchmark_dataset)
     if not problems:
@@ -212,6 +231,24 @@ def run_infer(
     output_csv: Optional[str] = None,
     mode: Optional[str] = None,
 ) -> dict:
+    """선택한 모드의 추론. 벤치마크면 CSV 출력, DB면 RTD_CONV_INF/HIS 기록.
+
+    Args:
+        settings: settings.json 로드 결과.
+        rule_timekey: 특정 시각 (None이면 DB MAX).
+        benchmark_dataset: 벤치마크 폴더 (DB 대신).
+        output_csv: 벤치마크 추론 출력 CSV 경로.
+        mode: plan-only | wip-static | dynamic.
+
+    Returns:
+        {"mode", "source": "benchmark"|"oracle", "rule_timekey", "rows", "output"?}
+
+    Example:
+        result = run_infer(load_settings("config/settings.json"),
+                           benchmark_dataset="benchmarks/benchmark_11",
+                           mode="dynamic")
+        # 동일 (pk, op) 묶기 + 첫 슬롯 할당만 출력
+    """
     mode = resolve_mode(settings, mode)
     model_path = model_path_for(settings, mode)
     if not Path(model_path).exists():
@@ -271,6 +308,8 @@ def _infer_dynamic_first_slot(problem, model_path, settings) -> AllocationSet:
         try:
             from sb3_contrib import MaskablePPO
             from core.rl_env_mp import MultiPeriodDispatchEnv
+            import torch
+            torch.distributions.Distribution.set_default_validate_args(False)
             model = MaskablePPO.load(model_path)
             env = MultiPeriodDispatchEnv(
                 [problem], num_slots=num_slots, slot_hours=slot_hours,
@@ -296,7 +335,21 @@ def _infer_dynamic_first_slot(problem, model_path, settings) -> AllocationSet:
 
 # ---------------------------------------------------------------------------
 def run_eval(settings: dict, mode: Optional[str] = None) -> dict:
-    """Evaluate one mode, or all three when mode == 'all'."""
+    """벤치마크 평가. 모드 'all'이면 세 모드 나란히.
+
+    Args:
+        settings: settings.json 로드 결과.
+        mode: plan-only | wip-static | dynamic | all.
+
+    Returns:
+        단일 모드: {"mode", "report_html", "report_md", "n_benchmarks",
+                    "avg_optimal", "avg_rl", "avg_heuristic"}
+        all      : {"modes": {<mode>: 위 dict, ...}}
+
+    Example:
+        result = run_eval(load_settings("config/settings.json"), mode="all")
+        # → result["modes"]["dynamic"]["avg_rl"] == 1.0
+    """
     mode = (mode or settings.get("model", {}).get("mode", "wip-static")).lower()
     if mode == "all":
         out = {}

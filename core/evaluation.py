@@ -17,6 +17,13 @@ from .simulator import Simulator, count_switches
 
 @dataclass
 class PolicyEvalResult:
+    """한 정책(optimal/heuristic/rl)의 한 벤치마크 결과.
+
+    Example:
+        PolicyEvalResult(name="rl", avg_achievement=0.875, switches=1,
+                         per_target={("P1","OP10"):1.0, ...},
+                         allocations=AllocationSet(...))
+    """
     name: str
     avg_achievement: float
     switches: int
@@ -26,6 +33,17 @@ class PolicyEvalResult:
 
 @dataclass
 class BenchmarkEvalResult:
+    """한 벤치마크 데이터셋에서 세 정책을 비교한 결과.
+
+    Example:
+        BenchmarkEvalResult(
+            dataset="benchmark_08",
+            optimal=PolicyEvalResult("optimal", 1.0, 0, ...),
+            heuristic=PolicyEvalResult("heuristic", 0.5, 0, ...),
+            rl=PolicyEvalResult("rl", 1.0, 0, ...),
+            mode="wip-static",
+        )
+    """
     dataset: str
     optimal: PolicyEvalResult
     heuristic: PolicyEvalResult
@@ -48,6 +66,22 @@ def evaluate_single(
     previous: Optional[AllocationSet] = None,
     ignore_wip: bool = False,
 ) -> Tuple[PolicyEvalResult, PolicyEvalResult, PolicyEvalResult]:
+    """단일 스냅샷에 대해 (optimal, heuristic, rl) 세 정책 비교.
+
+    Args:
+        problem: 평가할 스냅샷.
+        model_path: 학습된 MaskablePPO .zip 경로 (없으면 greedy 폴백).
+        previous: 이전 슬롯 할당 (전환 수 계산용). None이면 0.
+        ignore_wip: plan-only 모드 여부.
+
+    Returns:
+        (optimal, heuristic, rl) PolicyEvalResult 튜플.
+
+    Example:
+        opt, heu, rl = evaluate_single(problem,
+                                       model_path="artifacts/models/ppo.zip")
+        # opt.avg_achievement=1.0, heu=0.5, rl=1.0
+    """
     sim = Simulator(problem, ignore_wip=ignore_wip)
 
     opt = optimal_allocate(problem, ignore_wip=ignore_wip)
@@ -172,6 +206,8 @@ def evaluate_all_benchmark_datasets_dynamic(
     if model_path and Path(model_path).exists():
         try:
             from sb3_contrib import MaskablePPO
+            import torch
+            torch.distributions.Distribution.set_default_validate_args(False)
             rl_model = MaskablePPO.load(model_path)
         except Exception:
             rl_model = None

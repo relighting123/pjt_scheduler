@@ -12,11 +12,29 @@ def infer(
     model_path: Optional[str] = None,
     ignore_wip: bool = False,
 ) -> AllocationSet:
+    """단일 스냅샷 RL 추론. 모델 없으면/실패하면 greedy로 자동 폴백.
+
+    Args:
+        problem: 추론할 SchedulingProblem.
+        model_path: 학습된 MaskablePPO .zip 경로 (없으면 None).
+        ignore_wip: True면 plan-only 모드.
+
+    Returns:
+        AllocationSet — RL이 결정한 할당 (또는 greedy 폴백).
+
+    Example:
+        alloc = infer(problem, "artifacts/models/ppo_dispatch_wip_static.zip")
+        # AllocationSet(rule_timekey="...", allocations=[Allocation(...), ...])
+    """
     if not model_path:
         return greedy_allocate(problem, ignore_wip=ignore_wip)
     try:
         from .rl_env import DispatchEnv
         from .rl_train import load_policy
+        import torch
+        # MaskableCategorical validates before masking; disable global
+        # distribution validation (see core/rl_train.py).
+        torch.distributions.Distribution.set_default_validate_args(False)
     except Exception:
         return greedy_allocate(problem, ignore_wip=ignore_wip)
 

@@ -36,11 +36,23 @@ def build_conversion_rows(
     previous: Optional[AllocationSet],
     current: AllocationSet,
 ) -> List[Tuple]:
-    """Diff current vs previous to produce conversion rows.
+    """현재 할당과 이전 할당을 diff해 conversion 행을 생성.
 
-    A row is emitted whenever (batch, model) gains units compared to the
-    previous snapshot. The FROM side is the source bucket the unit came from
-    (best-effort: the previous snapshot's largest bucket of the same model).
+    이전 대비 (batch, model) 장비 수가 증가한 만큼 행 1줄. FROM은 이전
+    스냅샷에서 같은 모델을 다른 batch에서 가지고 있던 첫 항목.
+
+    Args:
+        rule_timekey: 출력 키 = START_CONV_TIME.
+        previous: 이전 AllocationSet (없으면 모두 신규).
+        current: 현재 AllocationSet.
+
+    Returns:
+        OUTPUT_COLUMNS 순서의 튜플 리스트.
+
+    Example:
+        rows = build_conversion_rows("2026051707000000", None, alloc)
+        # [("2026051707000000", "", "", "", "T5833",
+        #   "9C/92", "P1", "OP10", "T5833", "2026051707000000", 2)]
     """
     prev_by_bm = {}
     if previous is not None:

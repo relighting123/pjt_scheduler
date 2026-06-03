@@ -37,6 +37,33 @@ except Exception:  # pragma: no cover
 
 
 class MultiPeriodDispatchEnv(gym.Env if gym is not None else object):
+    """멀티 피리어드 dispatch RL 환경 (Gymnasium).
+
+    한 episode = num_slots × (substep 시퀀스). 슬롯 풀 소진 or NO-OP 시
+    슬롯 commit → WIP 흐름·전환 비용 적용 → 다음 슬롯 시작.
+
+    Args:
+        problems: 학습용 SchedulingProblem 리스트 (reset마다 무작위 선택).
+        num_slots: 한 episode의 슬롯 수.
+        slot_hours: 슬롯당 시간.
+        switch_time_hours: 슬롯 간 (batch, model) 이동 시 셋업 시간.
+        achievement_weight: 달성률 reward 계수.
+
+    Action space: Discrete(528). 단일 환경과 동일 인터페이스.
+    Observation: bucket_free(16) + shortfall(32) + wip(32) + uph_matrix(512)
+                 + prev_bucket_target(16) + slot_progress(1) = 609 dim.
+
+    Example:
+        env = MultiPeriodDispatchEnv([problem], num_slots=4, slot_hours=1.0,
+                                     switch_time_hours=0.5, seed=7)
+        obs, _ = env.reset()
+        while not done:
+            mask = env.action_masks()
+            action, _ = model.predict(obs, deterministic=True, action_masks=mask)
+            obs, r, term, trunc, info = env.step(int(action))
+            done = term or trunc
+        schedule = env.current_schedule()
+    """
     metadata = {"render_modes": []}
 
     MAX_BUCKETS = 16
