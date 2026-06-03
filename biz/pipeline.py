@@ -278,10 +278,10 @@ def run_infer(
         rows = build_conversion_rows(rk, None, allocation)
         write_oracle(
             conn,
-            output_table=oracle["output_table"],
-            history_table=oracle.get("history_table", ""),
+            query_dir=query_dir,
             rule_timekey=rk,
             rows=rows,
+            write_history=bool(oracle.get("write_history", True)),
         )
         return {"mode": mode, "source": "oracle", "rule_timekey": rk, "rows": len(rows)}
     finally:
