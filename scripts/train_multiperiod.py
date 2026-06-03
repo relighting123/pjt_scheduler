@@ -16,14 +16,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from core.domain import AllocationSet, SchedulingProblem  # noqa: E402
-from core.flow import (  # noqa: E402
+from core.sim.flow import (  # noqa: E402
     MultiPeriodSimulator,
     dynamic_greedy_policy,
     multiperiod_optimal,
     static_policy,
 )
-from core.rl_env_mp import MultiPeriodDispatchEnv  # noqa: E402
-from core.rl_train_mp import train_multiperiod  # noqa: E402
+from core.rl.env_mp import MultiPeriodDispatchEnv  # noqa: E402
+from core.rl.train_mp import train_multiperiod  # noqa: E402
 
 from test_multiperiod import (  # noqa: E402
     build_buildahead_problem,

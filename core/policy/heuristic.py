@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
-from .domain import Allocation, AllocationSet, SchedulingProblem
+from ..domain import Allocation, AllocationSet, SchedulingProblem
 
 
 def greedy_allocate(

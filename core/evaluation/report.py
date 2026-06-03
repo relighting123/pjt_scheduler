@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from .evaluation import BenchmarkEvalResult
+from .benchmark import BenchmarkEvalResult
 
 _HTML_TEMPLATE = """<!doctype html>
 <html lang="ko"><head><meta charset="utf-8">

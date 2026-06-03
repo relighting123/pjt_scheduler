@@ -8,11 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .domain import AllocationSet, SchedulingProblem
-from .heuristic import greedy_allocate
-from .optimizer import optimal_allocate
-from .rl_infer import infer as rl_infer
-from .simulator import Simulator, count_switches
+from ..domain import AllocationSet, SchedulingProblem
+from ..policy.heuristic import greedy_allocate
+from ..policy.optimizer import optimal_allocate
+from ..rl.infer import infer as rl_infer
+from ..sim.simulator import Simulator, count_switches
 
 
 @dataclass
@@ -156,7 +156,7 @@ def evaluate_all_benchmark_datasets_dynamic(
     available, else falls back to the dynamic-greedy policy.
     """
     from biz.data_loader import load_problem_from_csv_dir  # local import
-    from .flow import (
+    from ..sim.flow import (
         MultiPeriodSimulator,
         dynamic_greedy_policy,
         multiperiod_optimal,
@@ -164,7 +164,7 @@ def evaluate_all_benchmark_datasets_dynamic(
     )
 
     def _multiperiod_rl_policy(model):
-        from .rl_env_mp import MultiPeriodDispatchEnv
+        from ..rl.env_mp import MultiPeriodDispatchEnv
         env_ref: Dict = {}
 
         def policy(problem, wip, remaining_plan, prev_alloc, slot_idx):

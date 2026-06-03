@@ -19,8 +19,8 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Dict, List, Tuple
 
-from .domain import Allocation, AllocationSet, SchedulingProblem
-from .simulator import Simulator
+from ..domain import Allocation, AllocationSet, SchedulingProblem
+from ..sim.simulator import Simulator
 
 
 def _compositions(n: int, k: int):
@@ -68,7 +68,7 @@ def optimal_allocate(
     Falls back to the greedy heuristic if a bucket exceeds `max_units_per_bucket`
     or if the search space is too large.
     """
-    from .heuristic import greedy_allocate
+    from .heuristic import greedy_allocate  # same package
 
     pool = problem.equipment_pool()
     targets = problem.plan_targets()

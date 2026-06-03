@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
-from .domain import AllocationSet, SchedulingProblem
+from ..domain import AllocationSet, SchedulingProblem
 
 
 @dataclass

@@ -14,8 +14,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .domain import Allocation, AllocationSet, SchedulingProblem
-from .simulator import Simulator, count_switches
+from ..domain import Allocation, AllocationSet, SchedulingProblem
+from ..sim.simulator import Simulator, count_switches
 
 try:
     import gymnasium as gym

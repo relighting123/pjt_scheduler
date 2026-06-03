@@ -49,8 +49,8 @@ def _solve_optimal(spec: BenchmarkSpec) -> float:
         AvailabilityRecord, EquipmentRecord, PlanRecord, SchedulingProblem,
         ToolGroupRecord, ToolQtyRecord, UphRecord, WipRecord,
     )
-    from core.optimizer import optimal_allocate
-    from core.simulator import Simulator
+    from core.policy.optimizer import optimal_allocate
+    from core.sim.simulator import Simulator
 
     wip = [WipRecord(spec.rule_timekey, pk, op, spec.oper_seq.get((pk, op), 1), spec.wip.get((pk, op), 999999.0))
            for (pk, op, _) in spec.targets]
