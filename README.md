@@ -121,6 +121,9 @@ ATTR_VAL : 각 항목별 GBN_CD에 해당하는 값
 
 ## Created Project Usage
 
+> 회사 환경 배포(Oracle 스키마/권한/연결 점검/운영 검증)는
+> [DEPLOYMENT.md](DEPLOYMENT.md) 참고.
+
 ```bash
 python run.py eval                                            # --mode wip-static (default)
 python run.py eval --mode all                                 # plan-only + wip-static + dynamic side-by-side
