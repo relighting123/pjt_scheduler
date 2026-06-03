@@ -1,12 +1,46 @@
-# 회사 환경 배포 가이드
+# 회사 환경 배포 · 이식 절차서
 
-운영 라인의 Oracle DB 스키마만 맞추면 바로 사용할 수 있도록 정리.
+장비 전환 스케줄러를 회사 Oracle/MES 환경에 올릴 때 따르는 단계별 가이드.
+
+**설계 요약 (입출력 데이터)**  
+- `config/settings.json`에는 **DB 접속 정보·모델·라인 설정만** 둔다.  
+  테이블명·SELECT/INSERT 문은 **넣지 않는다**.  
+- 입력 스냅샷·키 목록·최신 키·결과 DELETE/INSERT는 모두  
+  `config/queries/*.sql` (또는 라인별 복사본)에서 **직접 SQL로 정의**한다.  
+- Python(`biz/data_loader.py`, `biz/output_writer.py`)은 SQL 파일을 읽어  
+  bind 변수만 넘기고, 피벗·저장 로직은 그대로 유지한다.
+
+**역할 분담**
+
+| 역할 | 담당 |
+|---|---|
+| DBA / 데이터 | §2 스키마·권한, §3-1 SQL 파일(뷰/테이블명·FAC 필터) |
+| ML / 스케줄러 | §1 환경, §5 학습·추론, §0 차원 상한 |
+| 운영 / MES | §5 cron·Airflow, §7 검증, 결과 테이블 모니터링 |
+
+---
+
+## 이식 절차 요약 (체크리스트)
+
+| 단계 | 내용 | 완료 |
+|:---:|---|:---:|
+| 1 | 저장소 clone, `pip install -e .[rl,oracle]`, DB 없이 테스트 3종 통과 (§1) | ☐ |
+| 2 | 입력·출력 Oracle 객체 생성 및 GRANT (§2) | ☐ |
+| 3 | `settings.json`에 접속·`query_dir`·`tool_groups`만 반영 (§3) | ☐ |
+| 4 | `config/queries/*.sql` 6개를 회사 뷰/테이블명에 맞게 수정 (§3-1) | ☐ |
+| 5 | §4 연결·`latest_key`·`source` 1건 조회 확인 | ☐ |
+| 6 | 구간 학습 → `artifacts/models/*.zip` 생성 (§5) | ☐ |
+| 7 | 추론 1회 → 출력 테이블·이력 확인 (§5, §7) | ☐ |
+| 8 | 운영 스케줄 등록 (§5) | ☐ |
+
+구버전 설정(`oracle.source_table` / `output_table` / `history_table`)을 쓰던 경우:  
+해당 키는 **제거**하고, 동일 테이블을 가리키도록 **각 SQL 파일의 FROM/INTO 절만** 수정하면 된다.
 
 ---
 
 ## 0. 사전 점검 — 라인 사이즈 vs RL env 상한
 
-RL 환경(`core/rl_env.py`, `core/rl_env_mp.py`)의 고정 상한:
+RL 환경(`core/rl/env.py`, `core/rl/env_mp.py`)의 고정 상한:
 
 | 차원 | 상한 | 의미 |
 |---|---|---|
@@ -27,8 +61,8 @@ FROM RTS_LINEDSDB_INF, latest
 WHERE RULE_TIMEKEY = latest.rk;
 ```
 
-- `n_buckets > 16` 또는 `n_targets > 32`이면 `core/rl_env.py`와
-  `core/rl_env_mp.py`의 클래스 상수 `MAX_BUCKETS` / `MAX_TARGETS`를
+- `n_buckets > 16` 또는 `n_targets > 32`이면 `core/rl/env.py`와
+  `core/rl/env_mp.py`의 클래스 상수 `MAX_BUCKETS` / `MAX_TARGETS`를
   실측값 + 여유분(예: 1.5×)으로 올린다.
 - 변경 후 기존 `.zip` 모델은 obs/action 차원이 달라지므로 **재학습 필수**.
 
@@ -45,9 +79,10 @@ pip install -e .[rl,oracle]
 #   sb3-contrib, oracledb
 
 # DB 없이 작동 확인 (모두 OK여야 함)
-python test_benchmark.py
-python test_multiperiod.py
-python run.py eval --mode all
+python3 test_benchmark.py
+python3 test_multiperiod.py
+python3 test_queries.py
+python3 run.py eval --mode all
 ```
 
 ---
@@ -218,18 +253,25 @@ INSERT INTO MY_RESULT_TABLE (...) VALUES (:rule_timekey, :from_batch, ...);
 
 ## 4. 연결 점검
 
+`latest_key.sql` / `source.sql`이 회사 DB에서 실행되는지 확인한다.
+
 ```bash
-python -c "
+python3 -c "
 from biz.pipeline import load_settings, _connect
-from biz.data_loader import latest_rule_timekey
+from biz.data_loader import latest_rule_timekey, load_problem_from_oracle
 s = load_settings('config/settings.json')
+qd = s['oracle']['query_dir']
 conn = _connect(s)
-print('latest RULE_TIMEKEY:', latest_rule_timekey(conn, s['oracle']['source_table']))
+rk = latest_rule_timekey(conn, qd)
+print('latest RULE_TIMEKEY:', rk)
+if rk:
+    p = load_problem_from_oracle(conn, qd, rk, s.get('tool_groups', {}))
+    print('wip rows:', len(p.wip), 'uph rows:', len(p.uph))
 conn.close()
 "
 ```
 
-→ 최신 키가 출력되면 연결/권한/데이터 모두 정상.
+→ 최신 키와 wip/uph 건수가 0이 아니면 연결·권한·`source.sql`·데이터가 정상.
 
 ---
 
@@ -237,22 +279,22 @@ conn.close()
 
 ```bash
 # A. 학습 (예: 1주일 구간)
-python run.py train --mode wip-static \
+python3 run.py train --mode wip-static \
   --from-timekey 20251020000000 --to-timekey 20251027000000 \
   --steps 50000
 
 # B. 추론 — DB MAX RULE_TIMEKEY 기준, 결과는 RTD_CONV_INF/HIS에 기록
-python run.py infer --mode wip-static
+python3 run.py infer --mode wip-static
 
 # C. 특정 키 추론
-python run.py infer --mode wip-static --timekey 20251027060000
+python3 run.py infer --mode wip-static --timekey 20251027060000
 
 # D. 멀티 피리어드(시간 인과 + 전환 비용) 운영
-python run.py train --mode dynamic --from-timekey ... --to-timekey ...
-python run.py infer --mode dynamic
+python3 run.py train --mode dynamic --from-timekey ... --to-timekey ...
+python3 run.py infer --mode dynamic
 ```
 
-운영 자동화는 cron/Airflow 등에서 `python run.py infer --mode <mode>`를
+운영 자동화는 cron/Airflow 등에서 `python3 run.py infer --mode <mode>`를
 주기 호출. 매번 DB 최신 RULE_TIMEKEY를 기준으로 RTD_CONV_INF 갱신.
 
 각 모드 전체 명령은 `README.md`의 "모델 모드" 섹션 참고.
@@ -269,18 +311,44 @@ python run.py infer --mode dynamic
 3. **벤치마크 한계** — `benchmarks/` 11개는 데모용. 실제 일반화는
    회사 DB의 다양한 스냅샷 구간으로 학습해야 가능.
 4. **모델 재학습 트리거** — `MAX_BUCKETS`/`MAX_TARGETS` 변경, obs 구조
-   변경, `core/rl_env*.py` 수정 시 기존 `.zip` 모델 호환 불가.
+   변경, `core/rl/env*.py` 수정 시 기존 `.zip` 모델 호환 불가.
 
 ---
 
 ## 7. 배포 후 검증 체크리스트
 
-- [ ] `python run.py eval --mode all` — 11 벤치마크 평가 통과 (DB 없이)
-- [ ] §4 연결 점검 스크립트로 latest_rule_timekey 출력 확인
-- [ ] 짧은 학습 시도: `python run.py train --mode wip-static
+- [ ] `python3 test_queries.py` — 6개 SQL 파일 존재·비어 있지 않음
+- [ ] `python3 run.py eval --mode all` — 11 벤치마크 평가 통과 (DB 없이)
+- [ ] §4 연결 점검 스크립트로 `latest_rule_timekey` 및 wip/uph 건수 확인
+- [ ] 짧은 학습 시도: `python3 run.py train --mode wip-static
       --from-timekey <전날> --to-timekey <오늘> --steps 5000`
       → `artifacts/models/ppo_dispatch_wip_static.zip` 생성
-- [ ] 추론: `python run.py infer --mode wip-static`
-      → `RTD_CONV_INF`에 rows 확인
+- [ ] 추론: `python3 run.py infer --mode wip-static`
+      → `RTD_CONV_INF`(또는 `insert_output.sql` 대상 테이블)에 rows 확인
 - [ ] 동일 키 추론 2회 → row count 변함 없어야 함 (replace 패턴)
-- [ ] `RTD_CONV_HIS` count는 추론마다 누적 증가
+- [ ] `RTD_CONV_HIS` count는 추론마다 누적 증가 (`write_history=true`일 때)
+
+---
+
+## 8. 라인별 SQL 디렉터리 분리 (선택)
+
+여러 FAB/라인을 한 저장소로 운영할 때:
+
+```text
+config/
+  settings.json          # oracle.query_dir 만 라인별로 바꿔 실행
+  queries/               # 기본(공통) 템플릿
+  queries_line_a/        # 라인 A용 source/range_keys/...
+  queries_line_b/
+```
+
+실행 예:
+
+```bash
+# settings에 query_dir을 바꾸지 않고, 런처에서 덮어쓰기 (예시)
+export SCHEDULER_QUERY_DIR=config/queries_line_a
+# 또는 settings.json 복사본 per line
+python3 run.py infer --settings config/settings_line_a.json
+```
+
+`--settings` 인자로 라인별 JSON을 지정할 수 있다 (`run.py` 참고).
