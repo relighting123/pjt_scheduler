@@ -138,7 +138,7 @@ GRANT SELECT, INSERT ON RTD_CONV_HIS TO <운영계정>;
 ## 3. `config/settings.json` 수정
 
 회사 DB 정보로 `oracle` 섹션만 바꾸면 됨. tool_groups는 라인의 실제 batch
-그룹으로 정의. 입력 SQL은 settings에 박지 않고 별도 파일로 관리 (§3-1).
+그룹으로 정의. 입출력 SQL은 settings에 박지 않고 별도 파일로 관리 (§3-1).
 
 ```json
 {
@@ -146,9 +146,8 @@ GRANT SELECT, INSERT ON RTD_CONV_HIS TO <운영계정>;
     "user":          "<회사 계정>",
     "password":      "<회사 비밀번호>",
     "dsn":           "<호스트>:<포트>/<서비스명>",
-    "output_table":  "RTD_CONV_INF",
-    "history_table": "RTD_CONV_HIS",
-    "query_dir":     "config/queries"
+    "query_dir":     "config/queries",
+    "write_history": true
   },
   "tool_groups": {
     "G001": ["<배치1>", "<배치2>"]
@@ -160,14 +159,17 @@ GRANT SELECT, INSERT ON RTD_CONV_HIS TO <운영계정>;
 **보안 권장**: 비밀번호는 운영에서 환경 변수로 빼고 launcher 스크립트가
 주입. 현재 코드는 평문 JSON 직접 읽음.
 
-### 3-1. 입력 SQL — `config/queries/*.sql`
+### 3-1. 입출력 SQL — `config/queries/*.sql`
 
-세 개의 SQL 파일을 그대로 두거나 회사 환경에 맞게 자유롭게 편집:
+6개의 SQL 파일을 그대로 두거나 회사 환경(테이블/뷰명, 필터, 파티션 힌트
+등)에 맞게 자유롭게 편집. settings에는 SQL이 한 줄도 없음.
+
+**입력**:
 
 | 파일 | 역할 | bind | 반환 컬럼 |
 |---|---|---|---|
-| `source.sql`     | RULE_TIMEKEY 1개의 스냅샷 피벗 | `:rule_timekey` | 8개 (아래 순서) |
-| `range_keys.sql` | [from_key, to_key] 구간의 distinct RULE_TIMEKEY | `:from_key`, `:to_key` | `RULE_TIMEKEY` 1개 |
+| `source.sql`     | RULE_TIMEKEY 1개 스냅샷 피벗 | `:rule_timekey` | 8개 (아래 순서) |
+| `range_keys.sql` | [from_key, to_key] 구간 RULE_TIMEKEY 목록 | `:from_key`, `:to_key` | `RULE_TIMEKEY` 1개 |
 | `latest_key.sql` | MAX(RULE_TIMEKEY) | 없음 | scalar |
 
 `source.sql`은 반드시 다음 8개 컬럼을 **이 순서**로 반환:
@@ -176,21 +178,41 @@ RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
 EQP_MODEL_CD, GBN_CD, ATTR_VAL
 ```
 
-`config/queries/source.sql` 예 (FAC_ID 필터 추가):
-```sql
-SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
-       EQP_MODEL_CD, GBN_CD, ATTR_VAL
-  FROM MY_PIVOT_VIEW
- WHERE RULE_TIMEKEY = :rule_timekey
-   AND FAC_ID = 'ICPRB'
+**출력**:
+
+| 파일 | 역할 | bind |
+|---|---|---|
+| `delete_output.sql`  | 출력 테이블에서 현재 RULE_TIMEKEY rows 삭제 | `:rule_timekey` |
+| `insert_output.sql`  | 출력 테이블에 신규 conversion row INSERT | 11개 (아래) |
+| `insert_history.sql` | 이력 테이블에 conversion row INSERT | 동일 |
+
+`insert_*.sql`의 bind 이름 (소문자 컬럼명, executemany로 row 단위 전송):
+```
+:rule_timekey, :from_batch, :from_plan_prod_key, :from_oper_id,
+:from_eqp_model_cd, :to_batch_id, :to_plan_prod_key, :to_oper_id,
+:to_eqp_model_cd, :start_conv_time, :eqp_qty
 ```
 
-전형적 활용:
-- FAC_ID/CO_DIV 등으로 다중 라인을 한 테이블에 두고 라인별 필터.
-- 여러 ETL 테이블을 JOIN해서 캐노니컬 8컬럼으로 변환.
-- 파티션 힌트, MATERIALIZED VIEW 사용 등 성능 튜닝.
+**예 — FAC_ID 필터 + 회사 명명 규칙 적용**:
+```sql
+-- source.sql
+SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
+       EQP_MODEL_CD, GBN_CD, ATTR_VAL
+  FROM MY_SNAPSHOT_VIEW
+ WHERE RULE_TIMEKEY = :rule_timekey
+   AND FAC_ID = 'ICPRB';
 
-`oracle.query_dir`로 별도 경로 지정도 가능 (예: 라인별 디렉터리).
+-- delete_output.sql
+DELETE FROM MY_RESULT_TABLE WHERE RULE_TIMEKEY = :rule_timekey;
+
+-- insert_output.sql
+INSERT INTO MY_RESULT_TABLE (...) VALUES (:rule_timekey, :from_batch, ...);
+```
+
+**자주 쓰는 옵션**:
+- `oracle.query_dir`을 라인별로 분리 (`config/queries_icprb/`, `config/queries_cjprb/`).
+- `oracle.write_history=false`로 이력 INSERT 끄기.
+- 6개 파일 중 일부는 그대로 두고 일부만 편집해도 됨.
 
 ---
 

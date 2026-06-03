@@ -3,9 +3,8 @@
     "user": "dispatcher",
     "password": "dispatcher",
     "dsn": "localhost:1521/XEPDB1",
-    "output_table": "RTD_CONV_INF",
-    "history_table": "RTD_CONV_HIS",
-    "query_dir": "config/queries"
+    "query_dir": "config/queries",
+    "write_history": true
   },
   "model": {
     "mode": "wip-static",
