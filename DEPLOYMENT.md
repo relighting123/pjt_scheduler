@@ -79,10 +79,10 @@ pip install -e .[rl,oracle]
 #   sb3-contrib, oracledb
 
 # DB 없이 작동 확인 (모두 OK여야 함)
-python3 test_benchmark.py
-python3 test_multiperiod.py
-python3 test_queries.py
-python3 run.py eval --mode all
+python test_benchmark.py
+python test_multiperiod.py
+python test_queries.py
+python run.py eval --mode all
 ```
 
 ---
@@ -115,11 +115,11 @@ CREATE INDEX IDX_RTS_LINEDSDB_RK ON RTS_LINEDSDB_INF (RULE_TIMEKEY);
 
 | GBN_CD | 의미 | 매핑 |
 |---|---|---|
-| `WIP_QTY` | 현재 재공 | `WipRecord` |
-| `UPH` | 시간당 생산량 | `UphRecord` |
+| `AVAIL_WIP_QTY` | 현재 재공 | `WipRecord` |
+| `EQUIP_UPH` | 시간당 생산량 | `UphRecord` |
 | `ASSIGN_EQUIP_CNT` | (배치, 모델)별 장비 보유 수 | `EquipmentRecord` |
-| `D0_TARGET_QTY` | 당일~다음날 07시 계획 | `PlanRecord` (합산) |
-| `D1_TARGET_QTY` | 다음날 07시~그 다음날 07시 계획 | `PlanRecord` (합산) |
+| `D0_PLAN` | 당일~다음날 07시 계획 | `PlanRecord` (합산) |
+| `D1_PLAN` | 다음날 07시~그 다음날 07시 계획 | `PlanRecord` (합산) |
 | `TOOL_QTY` | Tool 보유 수 | `ToolQtyRecord` |
 
 ### 2-2. 출력 테이블 — `RTD_CONV_INF` / `RTD_CONV_HIS`
@@ -256,7 +256,7 @@ INSERT INTO MY_RESULT_TABLE (...) VALUES (:rule_timekey, :from_batch, ...);
 `latest_key.sql` / `source.sql`이 회사 DB에서 실행되는지 확인한다.
 
 ```bash
-python3 -c "
+python -c "
 from biz.pipeline import load_settings, _connect
 from biz.data_loader import latest_rule_timekey, load_problem_from_oracle
 s = load_settings('config/settings.json')
@@ -279,22 +279,22 @@ conn.close()
 
 ```bash
 # A. 학습 (예: 1주일 구간)
-python3 run.py train --mode wip-static \
+python run.py train --mode wip-static \
   --from-timekey 20251020000000 --to-timekey 20251027000000 \
   --steps 50000
 
 # B. 추론 — DB MAX RULE_TIMEKEY 기준, 결과는 RTD_CONV_INF/HIS에 기록
-python3 run.py infer --mode wip-static
+python run.py infer --mode wip-static
 
 # C. 특정 키 추론
-python3 run.py infer --mode wip-static --timekey 20251027060000
+python run.py infer --mode wip-static --timekey 20251027060000
 
 # D. 멀티 피리어드(시간 인과 + 전환 비용) 운영
-python3 run.py train --mode dynamic --from-timekey ... --to-timekey ...
-python3 run.py infer --mode dynamic
+python run.py train --mode dynamic --from-timekey ... --to-timekey ...
+python run.py infer --mode dynamic
 ```
 
-운영 자동화는 cron/Airflow 등에서 `python3 run.py infer --mode <mode>`를
+운영 자동화는 cron/Airflow 등에서 `python run.py infer --mode <mode>`를
 주기 호출. 매번 DB 최신 RULE_TIMEKEY를 기준으로 RTD_CONV_INF 갱신.
 
 각 모드 전체 명령은 `README.md`의 "모델 모드" 섹션 참고.
@@ -317,13 +317,13 @@ python3 run.py infer --mode dynamic
 
 ## 7. 배포 후 검증 체크리스트
 
-- [ ] `python3 test_queries.py` — 6개 SQL 파일 존재·비어 있지 않음
-- [ ] `python3 run.py eval --mode all` — 11 벤치마크 평가 통과 (DB 없이)
+- [ ] `python test_queries.py` — 6개 SQL 파일 존재·비어 있지 않음
+- [ ] `python run.py eval --mode all` — 11 벤치마크 평가 통과 (DB 없이)
 - [ ] §4 연결 점검 스크립트로 `latest_rule_timekey` 및 wip/uph 건수 확인
-- [ ] 짧은 학습 시도: `python3 run.py train --mode wip-static
+- [ ] 짧은 학습 시도: `python run.py train --mode wip-static
       --from-timekey <전날> --to-timekey <오늘> --steps 5000`
       → `artifacts/models/ppo_dispatch_wip_static.zip` 생성
-- [ ] 추론: `python3 run.py infer --mode wip-static`
+- [ ] 추론: `python run.py infer --mode wip-static`
       → `RTD_CONV_INF`(또는 `insert_output.sql` 대상 테이블)에 rows 확인
 - [ ] 동일 키 추론 2회 → row count 변함 없어야 함 (replace 패턴)
 - [ ] `RTD_CONV_HIS` count는 추론마다 누적 증가 (`write_history=true`일 때)
@@ -348,7 +348,7 @@ config/
 # settings에 query_dir을 바꾸지 않고, 런처에서 덮어쓰기 (예시)
 export SCHEDULER_QUERY_DIR=config/queries_line_a
 # 또는 settings.json 복사본 per line
-python3 run.py infer --settings config/settings_line_a.json
+python run.py infer --settings config/settings_line_a.json
 ```
 
 `--settings` 인자로 라인별 JSON을 지정할 수 있다 (`run.py` 참고).

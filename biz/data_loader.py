@@ -8,11 +8,11 @@ Schema reference (from README):
 
 GBN_CD values pivot into the seven logical tables described in the README:
 
-  WIP_QTY              -> WipRecord
-  UPH                  -> UphRecord
+  AVAIL_WIP_QTY        -> WipRecord
+  EQUIP_UPH            -> UphRecord
   ASSIGN_EQUIP_CNT     -> EquipmentRecord
-  D0_TARGET_QTY,
-  D1_TARGET_QTY        -> PlanRecord (D0=until next 07h, D1=07h..07h next day)
+  D0_PLAN,
+  D1_PLAN              -> PlanRecord (D0=until next 07h, D1=07h..07h next day)
   TOOL_QTY             -> ToolQtyRecord
   (availability and tool-group are derived: UPH > 0 => available;
    tool-group = batch_id grouping is given by config + presence in BATCH_ID).
@@ -234,12 +234,12 @@ def load_problem_from_oracle(
     """Oracle RTS_LINEDSDB_INF의 한 RULE_TIMEKEY를 SchedulingProblem으로 피벗.
 
     GBN_CD 값에 따라 7개 record 종류로 분류:
-        WIP_QTY → WipRecord
-        UPH     → UphRecord
+        AVAIL_WIP_QTY → WipRecord
+        EQUIP_UPH     → UphRecord
         ASSIGN_EQUIP_CNT → EquipmentRecord
-        D0_TARGET_QTY, D1_TARGET_QTY → PlanRecord (합산)
+        D0_PLAN, D1_PLAN → PlanRecord (합산)
         TOOL_QTY → ToolQtyRecord
-        availability/tool_group은 UPH 존재 + batch_id 매핑으로 유도.
+        availability/tool_group은 EQUIP_UPH 존재 + batch_id 매핑으로 유도.
 
     Args:
         conn: oracledb 연결 객체.
@@ -281,13 +281,13 @@ def _rows_to_problem(
         (rk, batch_id, plan_prod_key, oper_id, oper_seq,
          eqp_model_cd, gbn_cd, attr_val) = row
         gbn = (gbn_cd or "").upper()
-        if gbn == "WIP_QTY":
+        if gbn == "AVAIL_WIP_QTY":
             wip.append(WipRecord(
                 rule_timekey=rk, plan_prod_key=plan_prod_key, oper_id=oper_id,
                 oper_seq=int(oper_seq or 0), wip_qty=float(attr_val or 0.0),
             ))
             seen_pko_batch[(plan_prod_key, oper_id)] = batch_id
-        elif gbn == "UPH":
+        elif gbn == "EQUIP_UPH":
             uph.append(UphRecord(
                 rule_timekey=rk, plan_prod_key=plan_prod_key, oper_id=oper_id,
                 eqp_model_cd=eqp_model_cd, uph=float(attr_val or 0.0),
@@ -295,7 +295,7 @@ def _rows_to_problem(
         elif gbn == "ASSIGN_EQUIP_CNT":
             key = (batch_id, eqp_model_cd)
             equipment_map[key] = equipment_map.get(key, 0) + int(float(attr_val or 0))
-        elif gbn in ("D0_TARGET_QTY", "D1_TARGET_QTY"):
+        elif gbn in ("D0_PLAN", "D1_PLAN"):
             key = (plan_prod_key, oper_id)
             plan_map[key] = plan_map.get(key, 0.0) + float(attr_val or 0.0)
         elif gbn == "TOOL_QTY":
