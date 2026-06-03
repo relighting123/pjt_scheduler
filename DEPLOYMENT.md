@@ -138,7 +138,7 @@ GRANT SELECT, INSERT ON RTD_CONV_HIS TO <운영계정>;
 ## 3. `config/settings.json` 수정
 
 회사 DB 정보로 `oracle` 섹션만 바꾸면 됨. tool_groups는 라인의 실제 batch
-그룹으로 정의.
+그룹으로 정의. 입력 SQL은 settings에 박지 않고 별도 파일로 관리 (§3-1).
 
 ```json
 {
@@ -146,9 +146,9 @@ GRANT SELECT, INSERT ON RTD_CONV_HIS TO <운영계정>;
     "user":          "<회사 계정>",
     "password":      "<회사 비밀번호>",
     "dsn":           "<호스트>:<포트>/<서비스명>",
-    "source_table":  "RTS_LINEDSDB_INF",
     "output_table":  "RTD_CONV_INF",
-    "history_table": "RTD_CONV_HIS"
+    "history_table": "RTD_CONV_HIS",
+    "query_dir":     "config/queries"
   },
   "tool_groups": {
     "G001": ["<배치1>", "<배치2>"]
@@ -160,49 +160,37 @@ GRANT SELECT, INSERT ON RTD_CONV_HIS TO <운영계정>;
 **보안 권장**: 비밀번호는 운영에서 환경 변수로 빼고 launcher 스크립트가
 주입. 현재 코드는 평문 JSON 직접 읽음.
 
-### 3-1. 사용자 정의 입력 쿼리 (선택)
+### 3-1. 입력 SQL — `config/queries/*.sql`
 
-기본은 `source_table` 한 테이블을 직접 SELECT. 회사 환경에 따라 뷰/조인/
-파티션 필터 등이 필요하면 **사용자가 작성한 SQL을 그대로 바인딩**해서
-쓸 수 있다. `oracle` 섹션에 다음 세 키를 추가:
+세 개의 SQL 파일을 그대로 두거나 회사 환경에 맞게 자유롭게 편집:
 
-```json
-{
-  "oracle": {
-    "user": "...",
-    "password": "...",
-    "dsn": "...",
-    "source_table": "",
-    "output_table": "RTD_CONV_INF",
-    "history_table": "RTD_CONV_HIS",
+| 파일 | 역할 | bind | 반환 컬럼 |
+|---|---|---|---|
+| `source.sql`     | RULE_TIMEKEY 1개의 스냅샷 피벗 | `:rule_timekey` | 8개 (아래 순서) |
+| `range_keys.sql` | [from_key, to_key] 구간의 distinct RULE_TIMEKEY | `:from_key`, `:to_key` | `RULE_TIMEKEY` 1개 |
+| `latest_key.sql` | MAX(RULE_TIMEKEY) | 없음 | scalar |
 
-    "source_query": "SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ, EQP_MODEL_CD, GBN_CD, ATTR_VAL FROM MY_PIVOT_VIEW WHERE RULE_TIMEKEY = :rule_timekey AND FAC_ID = 'ICPRB'",
-
-    "range_keys_query": "SELECT DISTINCT RULE_TIMEKEY FROM MY_PIVOT_VIEW WHERE RULE_TIMEKEY BETWEEN :from_key AND :to_key AND FAC_ID = 'ICPRB' ORDER BY RULE_TIMEKEY",
-
-    "latest_key_query": "SELECT MAX(RULE_TIMEKEY) FROM MY_PIVOT_VIEW WHERE FAC_ID = 'ICPRB' AND GBN_CD = 'WIP_QTY'"
-  }
-}
+`source.sql`은 반드시 다음 8개 컬럼을 **이 순서**로 반환:
+```
+RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
+EQP_MODEL_CD, GBN_CD, ATTR_VAL
 ```
 
-규칙:
+`config/queries/source.sql` 예 (FAC_ID 필터 추가):
+```sql
+SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
+       EQP_MODEL_CD, GBN_CD, ATTR_VAL
+  FROM MY_PIVOT_VIEW
+ WHERE RULE_TIMEKEY = :rule_timekey
+   AND FAC_ID = 'ICPRB'
+```
 
-- 세 키는 **선택**. 미지정/`null`이면 기본 SELECT 사용 (=`source_table` 직접).
-- 세 키를 정의하면 `source_table` 값은 무시되어도 무방 (빈 문자열 OK).
-- **bind 변수명 고정**: `:rule_timekey`, `:from_key`, `:to_key`를 그대로 사용.
-- `source_query`는 반드시 다음 8개 컬럼을 **이 순서**로 반환:
-    `RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
-     EQP_MODEL_CD, GBN_CD, ATTR_VAL`
-- `range_keys_query`는 `RULE_TIMEKEY` 단일 컬럼 반환.
-- `latest_key_query`는 단일 값 (MAX) 반환.
-- 세 쿼리 중 일부만 override 가능 (예: source_query만 정의하고
-  range/latest는 기본 사용).
-
-전형적인 활용:
-
+전형적 활용:
 - FAC_ID/CO_DIV 등으로 다중 라인을 한 테이블에 두고 라인별 필터.
-- 여러 ETL 테이블을 JOIN해서 캐노니컬 8컬럼 형태로 만들어 공급.
+- 여러 ETL 테이블을 JOIN해서 캐노니컬 8컬럼으로 변환.
 - 파티션 힌트, MATERIALIZED VIEW 사용 등 성능 튜닝.
+
+`oracle.query_dir`로 별도 경로 지정도 가능 (예: 라인별 디렉터리).
 
 ---
 

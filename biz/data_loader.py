@@ -158,75 +158,67 @@ def _load_groups_from_meta(path: Path) -> Dict[str, List[str]]:
 # ---------------------------------------------------------------------------
 # Oracle loader
 # ---------------------------------------------------------------------------
-# Default queries — used when settings don't override them. `{table}` is a
-# Python format placeholder for the configured table name; `:name` are Oracle
-# bind variables (kept distinct so users overriding the query can use the
-# bind names directly).
-_SELECT_SNAPSHOT_SQL = """
-SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
-       EQP_MODEL_CD, GBN_CD, ATTR_VAL
-  FROM {table}
- WHERE RULE_TIMEKEY = :rule_timekey
-"""
+# Queries live in standalone .sql files (default `config/queries/`) so the
+# operator can edit SQL without touching JSON or Python. Three filenames are
+# fixed:
+#
+#   source.sql       — per-RULE_TIMEKEY pivot, bind :rule_timekey, 8 columns
+#                      (RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID,
+#                       OPER_SEQ, EQP_MODEL_CD, GBN_CD, ATTR_VAL)
+#   range_keys.sql   — distinct RULE_TIMEKEY in [from_key, to_key]
+#   latest_key.sql   — MAX(RULE_TIMEKEY) scalar
 
-_SELECT_RANGE_KEYS_SQL = """
-SELECT DISTINCT RULE_TIMEKEY
-  FROM {table}
- WHERE RULE_TIMEKEY BETWEEN :from_key AND :to_key
- ORDER BY RULE_TIMEKEY
-"""
+_QUERY_FILES = {
+    "source":     "source.sql",
+    "range_keys": "range_keys.sql",
+    "latest_key": "latest_key.sql",
+}
 
-_SELECT_MAX_KEY_SQL = """
-SELECT MAX(RULE_TIMEKEY) FROM {table}
- WHERE GBN_CD = 'WIP_QTY'
-"""
+
+def load_sql(query_dir: Optional[str], kind: str) -> str:
+    """Read a query file from `query_dir` (kind ∈ {source, range_keys, latest_key}).
+
+    Raises FileNotFoundError if the directory or the kind file is missing —
+    the operator must provide the SQL; there is no embedded fallback.
+    """
+    if not query_dir:
+        raise FileNotFoundError(
+            f"oracle.query_dir not set; cannot resolve '{kind}' query."
+        )
+    path = Path(query_dir) / _QUERY_FILES[kind]
+    if not path.exists():
+        raise FileNotFoundError(f"Query file not found: {path}")
+    return path.read_text()
 
 
 def list_rule_timekeys(
     conn,
-    table: str,
+    query_dir: Optional[str],
     from_key: str,
     to_key: str,
-    custom_sql: Optional[str] = None,
 ) -> List[str]:
-    """구간 안의 distinct RULE_TIMEKEY 목록.
+    """`range_keys.sql`로 구간 안의 distinct RULE_TIMEKEY 목록을 반환.
 
-    Args:
-        conn: oracledb 연결.
-        table: 기본 쿼리에 채워지는 테이블명 (custom_sql 지정 시 무시).
-        from_key, to_key: 조회 구간 (binds :from_key, :to_key).
-        custom_sql: 사용자가 직접 작성한 쿼리. RULE_TIMEKEY 컬럼 1개를
-            반환해야 하고, `:from_key`와 `:to_key` bind를 그대로 사용해야 함.
-
-    Example custom_sql:
-        SELECT DISTINCT RULE_TIMEKEY
-          FROM MY_VIEW
-         WHERE RULE_TIMEKEY BETWEEN :from_key AND :to_key
-           AND FAC_ID = 'ICPRB'
+    Example:
+        keys = list_rule_timekeys(conn, "config/queries",
+                                  "20251020000000", "20251027000000")
+        # → ["20251020070000", "20251020080000", ...]
     """
     from core.db import fetch_all
-    sql = custom_sql or _SELECT_RANGE_KEYS_SQL.format(table=table)
+    sql = load_sql(query_dir, "range_keys")
     rows = fetch_all(conn, sql, {"from_key": from_key, "to_key": to_key})
     return [r[0] for r in rows]
 
 
-def latest_rule_timekey(
-    conn,
-    table: str,
-    custom_sql: Optional[str] = None,
-) -> Optional[str]:
-    """가장 최근 RULE_TIMEKEY (MAX).
+def latest_rule_timekey(conn, query_dir: Optional[str]) -> Optional[str]:
+    """`latest_key.sql`로 MAX(RULE_TIMEKEY)를 반환. 결과 없으면 None.
 
-    Args:
-        conn: oracledb 연결.
-        table: 기본 쿼리에 채워지는 테이블명 (custom_sql 지정 시 무시).
-        custom_sql: 사용자가 직접 작성한 쿼리. 단일 컬럼(=MAX 값)을 반환해야 함.
-
-    Example custom_sql:
-        SELECT MAX(RULE_TIMEKEY) FROM MY_VIEW WHERE FAC_ID = 'ICPRB'
+    Example:
+        rk = latest_rule_timekey(conn, "config/queries")
+        # → "20251027060000"
     """
     from core.db import fetch_all
-    sql = custom_sql or _SELECT_MAX_KEY_SQL.format(table=table)
+    sql = load_sql(query_dir, "latest_key")
     rows = fetch_all(conn, sql)
     if not rows or rows[0][0] is None:
         return None
@@ -235,10 +227,9 @@ def latest_rule_timekey(
 
 def load_problem_from_oracle(
     conn,
-    table: str,
+    query_dir: Optional[str],
     rule_timekey: str,
     tool_groups: Optional[Dict[str, List[str]]] = None,
-    custom_sql: Optional[str] = None,
 ) -> SchedulingProblem:
     """Oracle RTS_LINEDSDB_INF의 한 RULE_TIMEKEY를 SchedulingProblem으로 피벗.
 
@@ -252,42 +243,23 @@ def load_problem_from_oracle(
 
     Args:
         conn: oracledb 연결 객체.
-        table: 기본 쿼리에 채워지는 테이블명 ("RTS_LINEDSDB_INF" 등).
-            custom_sql 지정 시 무시됨.
+        query_dir: `source.sql` 등을 포함한 쿼리 디렉터리. 보통
+            `settings["oracle"]["query_dir"]` 값.
         rule_timekey: 조회 시각 키 (bind: :rule_timekey).
         tool_groups: {그룹명: [batch1, batch2, ...]} (config에서 주입).
-        custom_sql: 사용자가 직접 작성한 쿼리. 반드시 다음 8개 컬럼을
-            **이 순서**로 반환해야 한다:
-                RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
-                EQP_MODEL_CD, GBN_CD, ATTR_VAL
-            그리고 `:rule_timekey` bind를 사용해야 한다.
 
     Returns:
         SchedulingProblem.
 
-    Example (기본):
+    Example:
         conn = connect("dispatcher", "dispatcher", "localhost:1521/XEPDB1")
         problem = load_problem_from_oracle(
-            conn, "RTS_LINEDSDB_INF", "2026051707000000",
+            conn, "config/queries", "2026051707000000",
             tool_groups={"G001": ["9C/92", "9C/102"]},
-        )
-
-    Example (사용자 쿼리 — 뷰/조인/필터링 가능):
-        my_sql = '''
-        SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
-               EQP_MODEL_CD, GBN_CD, ATTR_VAL
-          FROM RTS_LINEDSDB_INF
-         WHERE RULE_TIMEKEY = :rule_timekey
-           AND FAC_ID = 'ICPRB'
-        '''
-        problem = load_problem_from_oracle(
-            conn, "", "2026051707000000",
-            tool_groups={"G001": ["9C/92", "9C/102"]},
-            custom_sql=my_sql,
         )
     """
     from core.db import fetch_all
-    sql = custom_sql or _SELECT_SNAPSHOT_SQL.format(table=table)
+    sql = load_sql(query_dir, "source")
     rows = fetch_all(conn, sql, {"rule_timekey": rule_timekey})
     return _rows_to_problem(rule_timekey, rows, tool_groups or {})
 

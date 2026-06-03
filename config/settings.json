@@ -3,18 +3,9 @@
     "user": "dispatcher",
     "password": "dispatcher",
     "dsn": "localhost:1521/XEPDB1",
-    "source_table": "RTS_LINEDSDB_INF",
     "output_table": "RTD_CONV_INF",
     "history_table": "RTD_CONV_HIS",
-
-    "_query_overrides_help": [
-      "아래 세 키는 선택. 정의하면 기본 SELECT 대신 사용자 쿼리가 실행된다.",
-      "사용자 쿼리는 :rule_timekey / :from_key / :to_key 바인드를 그대로 써야 한다.",
-      "source_query는 8개 컬럼을 이 순서로 반환: RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ, EQP_MODEL_CD, GBN_CD, ATTR_VAL"
-    ],
-    "source_query": null,
-    "range_keys_query": null,
-    "latest_key_query": null
+    "query_dir": "config/queries"
   },
   "model": {
     "mode": "wip-static",
