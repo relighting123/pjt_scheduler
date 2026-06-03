@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .domain import AllocationSet, SchedulingProblem
-from .heuristic import greedy_allocate
+from ..domain import AllocationSet, SchedulingProblem
+from ..policy.heuristic import greedy_allocate
 
 
 def infer(
@@ -29,8 +29,8 @@ def infer(
     if not model_path:
         return greedy_allocate(problem, ignore_wip=ignore_wip)
     try:
-        from .rl_env import DispatchEnv
-        from .rl_train import load_policy
+        from .env import DispatchEnv
+        from .train import load_policy
         import torch
         # MaskableCategorical validates before masking; disable global
         # distribution validation (see core/rl_train.py).

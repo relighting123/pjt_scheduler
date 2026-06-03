@@ -13,9 +13,9 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from .domain import SchedulingProblem
-from .heuristic import greedy_allocate
-from .rl_env import DispatchEnv
+from ..domain import SchedulingProblem
+from ..policy.heuristic import greedy_allocate
+from .env import DispatchEnv
 
 
 def _teacher_rollout(env: DispatchEnv) -> Tuple[List[np.ndarray], List[int]]:

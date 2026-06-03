@@ -13,9 +13,9 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from .domain import AllocationSet, SchedulingProblem
-from .flow import multiperiod_optimal
-from .rl_env_mp import MultiPeriodDispatchEnv
+from ..domain import AllocationSet, SchedulingProblem
+from ..sim.flow import multiperiod_optimal
+from .env_mp import MultiPeriodDispatchEnv
 
 
 def _schedule_to_actions(

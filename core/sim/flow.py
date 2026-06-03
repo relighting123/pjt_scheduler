@@ -26,8 +26,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .domain import AllocationSet, SchedulingProblem
-from .heuristic import greedy_allocate
+from ..domain import AllocationSet, SchedulingProblem
+from ..policy.heuristic import greedy_allocate
 from .simulator import count_switches
 
 # A policy maps (problem, current_wip, remaining_plan, prev_alloc, slot_idx)
@@ -267,7 +267,7 @@ def multiperiod_optimal(
         return sim.run(dynamic_greedy_policy)
 
     # enumerate per-slot pure allocations
-    from .domain import Allocation
+    from ..domain import Allocation
 
     def slot_allocations() -> List[AllocationSet]:
         combos: List[List[Optional[Tuple[str, str]]]] = [[]]

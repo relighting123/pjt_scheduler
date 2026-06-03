@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .domain import Allocation, AllocationSet, SchedulingProblem
+from ..domain import Allocation, AllocationSet, SchedulingProblem
 
 try:
     import gymnasium as gym

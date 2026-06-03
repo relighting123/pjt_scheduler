@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from biz.data_loader import load_problem_from_csv_dir  # noqa: E402
-from core.heuristic import greedy_allocate  # noqa: E402
-from core.optimizer import optimal_allocate  # noqa: E402
-from core.simulator import Simulator  # noqa: E402
+from core.policy.heuristic import greedy_allocate  # noqa: E402
+from core.policy.optimizer import optimal_allocate  # noqa: E402
+from core.sim.simulator import Simulator  # noqa: E402
 
 
 def main() -> int:
