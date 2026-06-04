@@ -210,6 +210,7 @@ skip-worktree가 켜진 동안에는 pull/merge가 로컬 `settings.json`을 건
     "password":      "<회사 비밀번호>",
     "dsn":           "<호스트>:<포트>/<서비스명>",
     "query_dir":     "config/queries",
+    "fac_id":        "CJPRB",
     "write_history": true
   },
   "tool_groups": {
@@ -267,7 +268,10 @@ SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
        EQP_MODEL_CD, GBN_CD, ATTR_VAL
   FROM MY_SNAPSHOT_VIEW
  WHERE RULE_TIMEKEY = :rule_timekey
-   AND FAC_ID = 'CJPRB';
+   AND FAC_ID = :fac_id;
+```
+
+`fac_id`는 `settings.json`의 `oracle.fac_id` 또는 CLI `--fac-id`로 지정 (기본 `CJPRB`).
 
 -- delete_output.sql
 DELETE FROM MY_RESULT_TABLE WHERE RULE_TIMEKEY = :rule_timekey;
@@ -294,10 +298,10 @@ from biz.data_loader import latest_rule_timekey, load_problem_from_oracle
 s = load_settings('config/settings.json')
 qd = s['oracle']['query_dir']
 conn = _connect(s)
-rk = latest_rule_timekey(conn, qd)
-print('latest RULE_TIMEKEY:', rk)
+rk = latest_rule_timekey(conn, qd, s)
+print('latest RULE_TIMEKEY:', rk, 'fac_id:', s['oracle'].get('fac_id', 'CJPRB'))
 if rk:
-    p = load_problem_from_oracle(conn, qd, rk, s.get('tool_groups', {}))
+    p = load_problem_from_oracle(conn, qd, rk, s.get('tool_groups', {}), s)
     print('wip rows:', len(p.wip), 'uph rows:', len(p.uph))
 conn.close()
 "

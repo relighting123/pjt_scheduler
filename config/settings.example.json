@@ -4,6 +4,7 @@
     "password": "dispatcher",
     "dsn": "localhost:1521/XEPDB1",
     "query_dir": "config/queries",
+    "fac_id": "CJPRB",
     "write_history": true
   },
   "model": {
@@ -38,7 +39,9 @@
   "infer": {
     "dump_snapshot_json": false,
     "snapshot_dir": "artifacts/inference/snapshots",
-    "use_snapshot_on_read": true
+    "use_snapshot_on_read": true,
+    "horizon_hours": 1.0,
+    "hours_per_day": 24.0
   },
   "benchmark": {
     "dataset_root": "benchmarks",

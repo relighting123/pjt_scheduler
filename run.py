@@ -16,6 +16,7 @@ import json
 import sys
 from pathlib import Path
 
+from biz.infer_report import format_infer_report_log
 from biz.pipeline import load_settings, run_eval, run_infer, run_train
 
 DEFAULT_SETTINGS = "config/settings.json"
@@ -23,6 +24,11 @@ DEFAULT_SETTINGS = "config/settings.json"
 
 def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--settings", default=DEFAULT_SETTINGS, help="Path to settings.json")
+    p.add_argument(
+        "--fac-id",
+        dest="fac_id",
+        help="Oracle FAC_ID filter (default: settings.oracle.fac_id or CJPRB)",
+    )
     p.add_argument(
         "--mode",
         choices=("plan-only", "wip-static", "dynamic", "all"),
@@ -88,6 +94,7 @@ def main(argv=None) -> int:
             benchmark_dataset=args.benchmark_dataset,
             steps=args.steps,
             mode=args.mode,
+            fac_id=args.fac_id,
         )
     elif args.command == "infer":
         if args.mode == "all":
@@ -100,6 +107,7 @@ def main(argv=None) -> int:
             mode=args.mode,
             dump_snapshot=args.dump_snapshot or bool(args.snapshot_path),
             snapshot_path=args.snapshot_path,
+            fac_id=args.fac_id,
         )
     elif args.command == "eval":
         result = run_eval(settings, mode=args.mode)
@@ -107,6 +115,8 @@ def main(argv=None) -> int:
         parser.error(f"unknown command: {args.command}")
         return 2
 
+    if args.command == "infer" and result.get("infer_report"):
+        print(format_infer_report_log(result["infer_report"]), file=sys.stderr)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 

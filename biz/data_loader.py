@@ -22,7 +22,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from core.domain import (
     AvailabilityRecord,
@@ -174,6 +174,28 @@ _QUERY_FILES = {
     "latest_key": "latest_key.sql",
 }
 
+_DEFAULT_FAC_ID = "CJPRB"
+
+
+def resolve_fac_id(settings: Optional[dict] = None, override: Optional[str] = None) -> str:
+    """Oracle 쿼리 FAC_ID bind 값 (settings.oracle.fac_id, 기본 CJPRB)."""
+    if override:
+        return override
+    if settings:
+        return str(settings.get("oracle", {}).get("fac_id", _DEFAULT_FAC_ID))
+    return _DEFAULT_FAC_ID
+
+
+def oracle_query_params(
+    settings: Optional[dict] = None,
+    *,
+    fac_id: Optional[str] = None,
+    **binds: Any,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"fac_id": resolve_fac_id(settings, fac_id)}
+    params.update(binds)
+    return params
+
 
 def load_sql(query_dir: Optional[str], kind: str) -> str:
     """Read a query file from `query_dir` (kind ∈ {source, range_keys, latest_key}).
@@ -196,6 +218,9 @@ def list_rule_timekeys(
     query_dir: Optional[str],
     from_key: str,
     to_key: str,
+    settings: Optional[dict] = None,
+    *,
+    fac_id: Optional[str] = None,
 ) -> List[str]:
     """`range_keys.sql`로 구간 안의 distinct RULE_TIMEKEY 목록을 반환.
 
@@ -206,11 +231,20 @@ def list_rule_timekeys(
     """
     from core.db import fetch_all
     sql = load_sql(query_dir, "range_keys")
-    rows = fetch_all(conn, sql, {"from_key": from_key, "to_key": to_key})
+    params = oracle_query_params(
+        settings, fac_id=fac_id, from_key=from_key, to_key=to_key,
+    )
+    rows = fetch_all(conn, sql, params)
     return [r[0] for r in rows]
 
 
-def latest_rule_timekey(conn, query_dir: Optional[str]) -> Optional[str]:
+def latest_rule_timekey(
+    conn,
+    query_dir: Optional[str],
+    settings: Optional[dict] = None,
+    *,
+    fac_id: Optional[str] = None,
+) -> Optional[str]:
     """`latest_key.sql`로 MAX(RULE_TIMEKEY)를 반환. 결과 없으면 None.
 
     Example:
@@ -219,7 +253,8 @@ def latest_rule_timekey(conn, query_dir: Optional[str]) -> Optional[str]:
     """
     from core.db import fetch_all
     sql = load_sql(query_dir, "latest_key")
-    rows = fetch_all(conn, sql)
+    params = oracle_query_params(settings, fac_id=fac_id)
+    rows = fetch_all(conn, sql, params)
     if not rows or rows[0][0] is None:
         return None
     return rows[0][0]
@@ -230,6 +265,9 @@ def load_problem_from_oracle(
     query_dir: Optional[str],
     rule_timekey: str,
     tool_groups: Optional[Dict[str, List[str]]] = None,
+    settings: Optional[dict] = None,
+    *,
+    fac_id: Optional[str] = None,
 ) -> SchedulingProblem:
     """Oracle RTS_LINEDSDB_INF의 한 RULE_TIMEKEY를 SchedulingProblem으로 피벗.
 
@@ -260,7 +298,8 @@ def load_problem_from_oracle(
     """
     from core.db import fetch_all
     sql = load_sql(query_dir, "source")
-    rows = fetch_all(conn, sql, {"rule_timekey": rule_timekey})
+    params = oracle_query_params(settings, fac_id=fac_id, rule_timekey=rule_timekey)
+    rows = fetch_all(conn, sql, params)
     return _rows_to_problem(rule_timekey, rows, tool_groups or {})
 
 
