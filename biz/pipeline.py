@@ -34,7 +34,12 @@ from .data_loader import (
     load_problem_from_oracle,
     resolve_fac_id,
 )
-from .infer_report import build_infer_report, format_infer_report_log
+from .infer_report import (
+    build_infer_report,
+    format_infer_report_log,
+    render_infer_report_html,
+    resolve_infer_report_path,
+)
 from .output_writer import build_conversion_rows, write_csv, write_oracle
 from .problem_snapshot import (
     dump_infer_snapshot,
@@ -78,12 +83,34 @@ def _finish_infer_result(
     allocation: AllocationSet,
     settings: dict,
     mode: str,
+    *,
+    report_html_path: Optional[str] = None,
 ) -> dict:
     report = build_infer_report(problem, allocation, settings, mode)
     result["fac_id"] = resolve_fac_id(settings)
     result["infer_report"] = report
     result["avg_achievement"] = report["avg_achievement"]
     result["total_daily_capacity"] = report["total_daily_capacity"]
+
+    infer_cfg = settings.get("infer", {})
+    if infer_cfg.get("write_report_html", True):
+        html_path = resolve_infer_report_path(
+            settings,
+            result.get("rule_timekey", problem.rule_timekey),
+            mode,
+            report_html_path,
+        )
+        result["report_html"] = render_infer_report_html(
+            report,
+            html_path,
+            rule_timekey=result.get("rule_timekey", problem.rule_timekey),
+            mode=mode,
+            fac_id=result.get("fac_id", ""),
+            source=result.get("source", "oracle"),
+            rows=int(result.get("rows", 0)),
+            allocation_count=int(result.get("allocation_count", 0)),
+            input_summary=result.get("input_summary"),
+        )
     return result
 
 
@@ -294,6 +321,7 @@ def run_infer(
     dump_snapshot: bool = False,
     snapshot_path: Optional[str] = None,
     fac_id: Optional[str] = None,
+    report_html_path: Optional[str] = None,
 ) -> dict:
     """선택한 모드의 추론. 벤치마크면 CSV 출력, DB면 RTD_CONV_INF/HIS 기록.
 
@@ -343,7 +371,10 @@ def run_infer(
         }
         if snap_path:
             result["snapshot"] = snap_path
-        return _finish_infer_result(result, problem, allocation, settings, mode)
+        return _finish_infer_result(
+            result, problem, allocation, settings, mode,
+            report_html_path=report_html_path,
+        )
 
     conn = _connect(settings)
     try:
@@ -382,7 +413,10 @@ def run_infer(
         }
         if snap_path:
             result["snapshot"] = snap_path
-        return _finish_infer_result(result, problem, allocation, settings, mode)
+        return _finish_infer_result(
+            result, problem, allocation, settings, mode,
+            report_html_path=report_html_path,
+        )
     finally:
         conn.close()
 

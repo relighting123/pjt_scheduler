@@ -1,6 +1,9 @@
 """Post-infer summary: per-target achievement, eqp counts, daily capacity."""
 from __future__ import annotations
 
+import html
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.domain import AllocationSet, SchedulingProblem
@@ -87,3 +90,131 @@ def format_infer_report_log(report: Dict[str, Any]) -> str:
             f"{t['achievement_rate']:.4f} | [{models}] | {t['daily_capacity']:.1f}"
         )
     return "\n".join(lines)
+
+
+def resolve_infer_report_path(
+    settings: dict,
+    rule_timekey: str,
+    mode: str,
+    override: Optional[str] = None,
+) -> Path:
+    """infer KPI HTML 출력 경로."""
+    if override:
+        return Path(override)
+    infer_cfg = settings.get("infer", {})
+    template = infer_cfg.get("report_path")
+    if template:
+        return Path(
+            str(template).format(rule_timekey=rule_timekey, mode=mode),
+        )
+    report_dir = Path(infer_cfg.get("report_dir", "artifacts/reports"))
+    return report_dir / f"infer_{rule_timekey}_{mode}.html"
+
+
+def _esc(value: Any) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _pct(rate: float) -> str:
+    return f"{100.0 * rate:.1f}%"
+
+
+def render_infer_report_html(
+    report: Dict[str, Any],
+    output_path: str | Path,
+    *,
+    rule_timekey: str,
+    mode: str,
+    fac_id: str = "",
+    source: str = "oracle",
+    rows: int = 0,
+    allocation_count: int = 0,
+    input_summary: Optional[Dict[str, Any]] = None,
+) -> str:
+    """infer KPI를 HTML 리포트로 저장."""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    avg = float(report.get("avg_achievement", 0.0))
+    total_capa = float(report.get("total_daily_capacity", 0.0))
+    horizon = float(report.get("horizon_hours", 1.0))
+    hours_day = float(report.get("hours_per_day", 24.0))
+
+    target_rows = []
+    for t in report.get("targets", []):
+        models = ", ".join(
+            f"{_esc(m)}:{q}" for m, q in sorted(t.get("eqp_qty_by_model", {}).items())
+        ) or "-"
+        achv = float(t.get("achievement_rate", 0.0))
+        achv_cls = "kpi-good" if achv >= 0.99 else ("kpi-warn" if achv >= 0.5 else "kpi-bad")
+        target_rows.append(
+            "<tr>"
+            f"<td>{_esc(t.get('batch_id', ''))}</td>"
+            f"<td>{_esc(t['plan_prod_key'])}</td>"
+            f"<td>{_esc(t['oper_id'])}</td>"
+            f"<td class='num'>{t.get('plan_qty', 0):.1f}</td>"
+            f"<td class='num'>{t.get('produced_qty', 0):.1f}</td>"
+            f"<td class='num {achv_cls}'>{_pct(achv)}</td>"
+            f"<td>{models}</td>"
+            f"<td class='num'>{t.get('daily_capacity', 0):.1f}</td>"
+            "</tr>"
+        )
+
+    summary = input_summary or {}
+    summary_items = "".join(
+        f"<li><strong>{_esc(k)}</strong>: {_esc(v)}</li>"
+        for k, v in sorted(summary.items())
+    )
+
+    body = f"""<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<title>Infer KPI — {_esc(rule_timekey)}</title>
+<style>
+body{{font-family:system-ui,sans-serif;max-width:1200px;margin:2rem auto;color:#222;padding:0 1rem}}
+.kpi-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin:1.5rem 0}}
+.kpi{{background:#f9fafb;border:1px solid #e5e7eb;border-radius:.5rem;padding:1rem 1.1rem}}
+.kpi label{{display:block;font-size:.8rem;color:#666;margin-bottom:.35rem}}
+.kpi .value{{font-size:1.45rem;font-weight:600}}
+table{{border-collapse:collapse;width:100%;margin:1rem 0}}
+th,td{{border:1px solid #ddd;padding:.5rem .75rem}}
+th{{background:#f5f5f5;text-align:center}}
+td.num{{text-align:right;font-variant-numeric:tabular-nums}}
+td:first-child,th:first-child{{text-align:left}}
+.kpi-good{{color:#0a7;font-weight:600}}
+.kpi-warn{{color:#b80;font-weight:600}}
+.kpi-bad{{color:#c33;font-weight:600}}
+.meta{{color:#555;font-size:.95rem}}
+h2{{margin-top:2rem}}
+ul.summary{{background:#f9fafb;border:1px solid #e5e7eb;border-radius:.5rem;padding:.75rem 1.25rem}}
+</style></head><body>
+<h1>Inference KPI Report</h1>
+<p class="meta">Generated: {_esc(datetime.now().isoformat(timespec='seconds'))}<br>
+RULE_TIMEKEY: <strong>{_esc(rule_timekey)}</strong> &nbsp;|&nbsp;
+FAC_ID: <strong>{_esc(fac_id)}</strong> &nbsp;|&nbsp;
+Mode: <strong>{_esc(mode)}</strong> &nbsp;|&nbsp;
+Source: {_esc(source)}</p>
+
+<div class="kpi-grid">
+  <div class="kpi"><label>평균 달성률</label><div class="value">{_pct(avg)}</div></div>
+  <div class="kpi"><label>합산 일 Capa</label><div class="value">{total_capa:,.0f}</div></div>
+  <div class="kpi"><label>전환 출력 행</label><div class="value">{rows}</div></div>
+  <div class="kpi"><label>할당 건수</label><div class="value">{allocation_count}</div></div>
+  <div class="kpi"><label>시뮬 horizon (h)</label><div class="value">{horizon:g}</div></div>
+  <div class="kpi"><label>일 Capa 기준 (h)</label><div class="value">{hours_day:g}</div></div>
+</div>
+
+<h2>입력 요약</h2>
+<ul class="summary">{summary_items or '<li>—</li>'}</ul>
+
+<h2>공정별 KPI</h2>
+<table>
+<thead><tr>
+<th>batch_id</th><th>plan_prod_key</th><th>oper_id</th>
+<th>plan_qty</th><th>produced</th><th>달성률</th><th>eqp (model:qty)</th><th>일 capa</th>
+</tr></thead>
+<tbody>{''.join(target_rows) or '<tr><td colspan="8">No plan targets</td></tr>'}</tbody>
+</table>
+</body></html>
+"""
+    path.write_text(body, encoding="utf-8")
+    return str(path)
