@@ -111,16 +111,17 @@ CREATE TABLE RTS_LINEDSDB_INF (
 CREATE INDEX IDX_RTS_LINEDSDB_RK ON RTS_LINEDSDB_INF (RULE_TIMEKEY);
 ```
 
-`biz/data_loader.py`의 `_rows_to_problem`이 해석하는 `GBN_CD` 값:
+입력 SQL 파일별 매핑 (기본 템플릿은 `RTS_LINEDSDB_INF` + `GBN_CD` 필터):
 
-| GBN_CD | 의미 | 매핑 |
-|---|---|---|
-| `AVAIL_WIP_QTY` | 현재 재공 | `WipRecord` |
-| `EQUIP_UPH` | 시간당 생산량 | `UphRecord` |
-| `ASSIGN_EQUIP_CNT` | (배치, 모델)별 장비 보유 수 | `EquipmentRecord` |
-| `D0_PLAN` | 당일~다음날 07시 계획 | `PlanRecord` (합산) |
-| `D1_PLAN` | 다음날 07시~그 다음날 07시 계획 | `PlanRecord` (합산) |
-| `TOOL_QTY` | Tool 보유 수 | `ToolQtyRecord` |
+| SQL | 매핑 |
+|---|---|
+| `wip.sql` | `WipRecord` |
+| `uph.sql` | `UphRecord` |
+| `equipment.sql` | `EquipmentRecord` |
+| `plan.sql` | `PlanRecord` |
+| `tool_qty.sql` | `ToolQtyRecord` |
+
+availability / tool_group 은 `uph`·`wip` 결과에서 코드가 유도.
 
 ### 2-2. 출력 테이블 — `RTD_CONV_INF` / `RTD_CONV_HIS`
 
@@ -210,7 +211,6 @@ skip-worktree가 켜진 동안에는 pull/merge가 로컬 `settings.json`을 건
     "password":      "<회사 비밀번호>",
     "dsn":           "<호스트>:<포트>/<서비스명>",
     "query_dir":     "config/queries",
-    "query_mode":    "split",
     "fac_id":        "CJPRB",
     "write_history": true
   },
@@ -229,38 +229,17 @@ skip-worktree가 켜진 동안에는 pull/merge가 로컬 `settings.json`을 건
 SQL 파일을 회사 환경에 맞게 자유롭게 편집. settings에는 SQL이 없음.
 파일은 **UTF-8**로 저장.
 
-**`oracle.query_mode`**
+**입력** — bind `:rule_timekey`, `:fac_id` (구간 쿼리는 `:from_key`, `:to_key` 추가):
 
-| mode | 설명 |
-|---|---|
-| `split` (권장) | `wip.sql` … `tool_qty.sql` 항목별 조회 후 Python 매핑 |
-| `pivot` | `source.sql` 1회 + `GBN_CD` 피벗 |
-
-**공통**: `range_keys.sql`, `latest_key.sql` — bind `:fac_id` (+ 구간 bind)
-
-**split 모드** — 컬럼 순서만 유지하면 SQL 본문은 자유:
-
-| 파일 | → | 컬럼 |
+| 파일 | → | 반환 컬럼 (순서) |
 |---|---|---|
 | `wip.sql` | WipRecord | RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ, WIP_QTY |
 | `uph.sql` | UphRecord | RULE_TIMEKEY, PLAN_PROD_KEY, OPER_ID, EQP_MODEL_CD, UPH |
 | `equipment.sql` | EquipmentRecord | RULE_TIMEKEY, BATCH_ID, EQP_MODEL_CD, EQP_QTY |
 | `plan.sql` | PlanRecord | RULE_TIMEKEY, PLAN_PROD_KEY, OPER_ID, START_TIME, END_TIME, PLAN_QTY |
 | `tool_qty.sql` | ToolQtyRecord | RULE_TIMEKEY, BATCH_ID, EQP_MODEL_CD, TOOL_QTY |
-
-**pivot 모드** — `source.sql` 8컬럼:
-
-| 파일 | bind |
-|---|---|
-| `source.sql` | `:rule_timekey`, `:fac_id` |
-| `range_keys.sql` | `:from_key`, `:to_key`, `:fac_id` |
-| `latest_key.sql` | `:fac_id` |
-
-`source.sql`은 반드시 다음 8개 컬럼을 **이 순서**로 반환:
-```
-RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
-EQP_MODEL_CD, GBN_CD, ATTR_VAL
-```
+| `range_keys.sql` | 학습 구간 키 | RULE_TIMEKEY |
+| `latest_key.sql` | MAX 키 | scalar |
 
 **출력**:
 
@@ -277,12 +256,10 @@ EQP_MODEL_CD, GBN_CD, ATTR_VAL
 :to_eqp_model_cd, :start_conv_time, :eqp_qty
 ```
 
-**예 — FAC_ID 필터 + 회사 명명 규칙 적용**:
+**예 — wip.sql만 회사 뷰로 교체**:
 ```sql
--- source.sql
-SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
-       EQP_MODEL_CD, GBN_CD, ATTR_VAL
-  FROM MY_SNAPSHOT_VIEW
+SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ, WIP_QTY
+  FROM MY_WIP_VIEW
  WHERE RULE_TIMEKEY = :rule_timekey
    AND FAC_ID = :fac_id;
 
@@ -304,7 +281,7 @@ INSERT INTO MY_RESULT_TABLE (...) VALUES (:rule_timekey, :from_batch, ...);
 
 ## 4. 연결 점검
 
-`latest_key.sql` / `source.sql`이 회사 DB에서 실행되는지 확인한다.
+`latest_key.sql` / `wip.sql` 등 입력 SQL이 회사 DB에서 실행되는지 확인한다.
 
 ```bash
 python -c "
@@ -322,7 +299,7 @@ conn.close()
 "
 ```
 
-→ 최신 키와 wip/uph 건수가 0이 아니면 연결·권한·`source.sql`·데이터가 정상.
+→ 최신 키와 wip/uph 건수가 0이 아니면 연결·권한·입력 SQL·데이터가 정상.
 
 ---
 
