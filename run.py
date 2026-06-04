@@ -125,6 +125,8 @@ def main(argv=None) -> int:
         print(format_infer_report_log(result["infer_report"]), file=sys.stderr)
         if result.get("report_html"):
             print(f"KPI HTML report: {result['report_html']}", file=sys.stderr)
+        if result.get("gantt_html"):
+            print(f"Gantt HTML: {result['gantt_html']}", file=sys.stderr)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
