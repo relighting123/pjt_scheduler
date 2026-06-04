@@ -32,7 +32,9 @@ from .data_loader import (
     list_rule_timekeys,
     load_problem_from_csv_dir,
     load_problem_from_oracle,
+    resolve_fac_id,
 )
+from .infer_report import build_infer_report, format_infer_report_log
 from .output_writer import build_conversion_rows, write_csv, write_oracle
 from .problem_snapshot import (
     dump_infer_snapshot,
@@ -70,6 +72,21 @@ def _apply_infer_snapshot(
     return problem, str(path), summary
 
 
+def _finish_infer_result(
+    result: dict,
+    problem: SchedulingProblem,
+    allocation: AllocationSet,
+    settings: dict,
+    mode: str,
+) -> dict:
+    report = build_infer_report(problem, allocation, settings, mode)
+    result["fac_id"] = resolve_fac_id(settings)
+    result["infer_report"] = report
+    result["avg_achievement"] = report["avg_achievement"]
+    result["total_daily_capacity"] = report["total_daily_capacity"]
+    return result
+
+
 def load_settings(path: str | Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -101,6 +118,7 @@ def _problems_for_training(
     to_timekey: Optional[str],
     rule_timekey: Optional[str],
     benchmark_dataset: Optional[str],
+    fac_id: Optional[str] = None,
 ) -> List[SchedulingProblem]:
     if benchmark_dataset:
         return [load_problem_from_csv_dir(benchmark_dataset)]
@@ -112,11 +130,19 @@ def _problems_for_training(
     conn = _connect(settings)
     try:
         query_dir = settings["oracle"].get("query_dir", "config/queries")
-        keys = list_rule_timekeys(conn, query_dir, from_timekey, to_timekey)
+        fid = resolve_fac_id(settings, fac_id)
+        keys = list_rule_timekeys(
+            conn, query_dir, from_timekey, to_timekey, settings, fac_id=fid,
+        )
         if not keys:
             return []
         groups = settings.get("tool_groups", {})
-        return [load_problem_from_oracle(conn, query_dir, k, groups) for k in keys]
+        return [
+            load_problem_from_oracle(
+                conn, query_dir, k, groups, settings, fac_id=fid,
+            )
+            for k in keys
+        ]
     finally:
         conn.close()
 
@@ -130,6 +156,7 @@ def run_train(
     benchmark_dataset: Optional[str] = None,
     steps: Optional[int] = None,
     mode: Optional[str] = None,
+    fac_id: Optional[str] = None,
 ) -> dict:
     """선택한 모드의 학습 파이프라인. 학습 후 벤치마크 평가까지 수행.
 
@@ -151,7 +178,9 @@ def run_train(
                            steps=50000, mode="wip-static")
     """
     mode = resolve_mode(settings, mode)
-    problems = _problems_for_training(settings, from_timekey, to_timekey, rule_timekey, benchmark_dataset)
+    problems = _problems_for_training(
+        settings, from_timekey, to_timekey, rule_timekey, benchmark_dataset, fac_id,
+    )
     if not problems:
         raise RuntimeError("No training problems found for the given range.")
 
@@ -264,6 +293,7 @@ def run_infer(
     mode: Optional[str] = None,
     dump_snapshot: bool = False,
     snapshot_path: Optional[str] = None,
+    fac_id: Optional[str] = None,
 ) -> dict:
     """선택한 모드의 추론. 벤치마크면 CSV 출력, DB면 RTD_CONV_INF/HIS 기록.
 
@@ -313,17 +343,21 @@ def run_infer(
         }
         if snap_path:
             result["snapshot"] = snap_path
-        return result
+        return _finish_infer_result(result, problem, allocation, settings, mode)
 
     conn = _connect(settings)
     try:
         oracle = settings["oracle"]
         query_dir = oracle.get("query_dir", "config/queries")
-        rk = rule_timekey or latest_rule_timekey(conn, query_dir)
+        fid = resolve_fac_id(settings, fac_id)
+        rk = rule_timekey or latest_rule_timekey(
+            conn, query_dir, settings, fac_id=fid,
+        )
         if not rk:
             raise RuntimeError("No RULE_TIMEKEY found in source query.")
         problem = load_problem_from_oracle(
             conn, query_dir, rk, settings.get("tool_groups", {}),
+            settings, fac_id=fid,
         )
         problem, snap_path, input_summary = _apply_infer_snapshot(
             settings, problem, mode=mode, source="oracle",
@@ -348,7 +382,7 @@ def run_infer(
         }
         if snap_path:
             result["snapshot"] = snap_path
-        return result
+        return _finish_infer_result(result, problem, allocation, settings, mode)
     finally:
         conn.close()
 

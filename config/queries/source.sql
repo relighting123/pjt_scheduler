@@ -1,6 +1,6 @@
 -- Per-RULE_TIMEKEY snapshot pivot for the scheduler input loader.
 --
--- Bind variable: :rule_timekey
+-- Bind variables: :rule_timekey, :fac_id
 -- Required columns (in this exact order):
 --   RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
 --   EQP_MODEL_CD, GBN_CD, ATTR_VAL
@@ -12,4 +12,4 @@ SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
        EQP_MODEL_CD, GBN_CD, ATTR_VAL
   FROM RTS_LINEDSDB_INF
  WHERE RULE_TIMEKEY = :rule_timekey
-   AND FAC_ID = 'CJPRB'
+   AND FAC_ID = :fac_id
