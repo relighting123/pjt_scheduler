@@ -129,7 +129,15 @@ python run.py eval                                            # --mode wip-stati
 python run.py eval --mode all                                 # plan-only + wip-static + dynamic side-by-side
 python run.py train --benchmark-dataset benchmarks/benchmark_01 --steps 50000
 python run.py infer --benchmark-dataset benchmarks/benchmark_01 --output artifacts/inference/allocation.csv
+# DB infer 입력을 JSON으로 저장·재로드 후 추론 (로그/원인 분석)
+python run.py infer --dump-snapshot
+# 또는 settings.json → infer.dump_snapshot_json: true
 ```
+
+infer 결과 JSON에는 `input_summary`(wip/uph/plan 건수), `allocation_count`,
+`rows`(DB 전환 출력 건수)가 포함된다. `--dump-snapshot` 사용 시
+`artifacts/inference/snapshots/<RULE_TIMEKEY>_<mode>.json` 파일을 열어
+DB에서 읽은 입력 전체를 확인할 수 있다.
 
 ### 모델 모드 (`--mode`)
 

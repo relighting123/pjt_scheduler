@@ -35,6 +35,11 @@
     "achievement_weight": 1.0,
     "switch_penalty": 0.02
   },
+  "infer": {
+    "dump_snapshot_json": false,
+    "snapshot_dir": "artifacts/inference/snapshots",
+    "use_snapshot_on_read": true
+  },
   "benchmark": {
     "dataset_root": "benchmarks",
     "report_path": "artifacts/reports/benchmark.html",

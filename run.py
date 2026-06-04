@@ -44,6 +44,16 @@ def _add_infer_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--timekey", dest="rule_timekey")
     p.add_argument("--benchmark-dataset", dest="benchmark_dataset")
     p.add_argument("--output", dest="output_csv")
+    p.add_argument(
+        "--dump-snapshot",
+        action="store_true",
+        help="Save infer input as JSON (artifacts/inference/snapshots) and reload it",
+    )
+    p.add_argument(
+        "--snapshot-path",
+        dest="snapshot_path",
+        help="Override JSON snapshot file path (implies structured infer log)",
+    )
 
 
 def main(argv=None) -> int:
@@ -88,6 +98,8 @@ def main(argv=None) -> int:
             benchmark_dataset=args.benchmark_dataset,
             output_csv=args.output_csv,
             mode=args.mode,
+            dump_snapshot=args.dump_snapshot or bool(args.snapshot_path),
+            snapshot_path=args.snapshot_path,
         )
     elif args.command == "eval":
         result = run_eval(settings, mode=args.mode)
