@@ -137,9 +137,10 @@ python run.py infer --dump-snapshot
 `config/settings.json` → `oracle.fac_id` (기본 `CJPRB`) 또는 `--fac-id ICPRB`로
 공장 필터를 바꿀 수 있다.
 
-infer 결과 JSON에는 `input_summary`, `infer_report`(batch/pk/op별 달성률·모델별
-댓수·일 capa), `allocation_count`, `rows`가 포함된다. stderr에 표 형식 로그가
-출력된다. `--dump-snapshot` 사용 시
+infer 결과 JSON에는 `input_summary`, `infer_report`, `report_html`(KPI HTML),
+`allocation_count`, `rows`가 포함된다. stderr에 표 로그 + HTML 경로가 출력된다.
+HTML 기본 경로: `artifacts/reports/infer_<RULE_TIMEKEY>_<mode>.html`.
+`--dump-snapshot` 사용 시
 `artifacts/inference/snapshots/<RULE_TIMEKEY>_<mode>.json` 파일을 열어
 DB에서 읽은 입력 전체를 확인할 수 있다.
 

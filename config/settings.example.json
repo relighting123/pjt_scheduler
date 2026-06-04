@@ -41,7 +41,9 @@
     "snapshot_dir": "artifacts/inference/snapshots",
     "use_snapshot_on_read": true,
     "horizon_hours": 1.0,
-    "hours_per_day": 24.0
+    "hours_per_day": 24.0,
+    "write_report_html": true,
+    "report_dir": "artifacts/reports"
   },
   "benchmark": {
     "dataset_root": "benchmarks",

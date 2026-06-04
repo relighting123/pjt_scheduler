@@ -60,6 +60,11 @@ def _add_infer_args(p: argparse.ArgumentParser) -> None:
         dest="snapshot_path",
         help="Override JSON snapshot file path (implies structured infer log)",
     )
+    p.add_argument(
+        "--report-html",
+        dest="report_html",
+        help="Infer KPI HTML report path (default: artifacts/reports/infer_<timekey>_<mode>.html)",
+    )
 
 
 def main(argv=None) -> int:
@@ -108,6 +113,7 @@ def main(argv=None) -> int:
             dump_snapshot=args.dump_snapshot or bool(args.snapshot_path),
             snapshot_path=args.snapshot_path,
             fac_id=args.fac_id,
+            report_html_path=args.report_html,
         )
     elif args.command == "eval":
         result = run_eval(settings, mode=args.mode)
@@ -117,6 +123,8 @@ def main(argv=None) -> int:
 
     if args.command == "infer" and result.get("infer_report"):
         print(format_infer_report_log(result["infer_report"]), file=sys.stderr)
+        if result.get("report_html"):
+            print(f"KPI HTML report: {result['report_html']}", file=sys.stderr)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
