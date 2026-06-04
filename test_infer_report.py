@@ -16,9 +16,11 @@ def test_build_infer_report_benchmark():
     report = build_infer_report(problem, alloc, settings, "wip-static")
     assert report["targets"]
     assert 0.0 <= report["avg_achievement"] <= 1.0
+    assert 0.0 <= report["avg_utilization"] <= 1.0
     assert report["total_daily_capacity"] > 0
     t0 = report["targets"][0]
     assert "batch_id" in t0 and "eqp_qty_by_model" in t0
+    assert "utilization_rate" in t0
 
 
 def test_resolve_fac_id():
@@ -44,6 +46,7 @@ def test_infer_report_html():
     )
     text = Path(out).read_text(encoding="utf-8")
     assert "평균 달성률" in text
+    assert "평균 가동률" in text
     assert "공정별 KPI" in text
     assert problem.wip[0].plan_prod_key in text or "plan_prod_key" in text
 

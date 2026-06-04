@@ -96,6 +96,7 @@ def _finish_infer_result(
     result["fac_id"] = resolve_fac_id(settings)
     result["infer_report"] = report
     result["avg_achievement"] = report["avg_achievement"]
+    result["avg_utilization"] = report["avg_utilization"]
     result["total_daily_capacity"] = report["total_daily_capacity"]
 
     infer_cfg = settings.get("infer", {})

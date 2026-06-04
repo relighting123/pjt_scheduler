@@ -36,6 +36,8 @@ def build_infer_report(
 
     targets: List[Dict[str, Any]] = []
     total_daily_capacity = 0.0
+    total_produced = 0.0
+    capa_scale = horizon / hours_day if hours_day > 0 else 0.0
 
     for pk, op, plan_qty in sorted(problem.plan_targets()):
         batch_id = problem.batch_of(pk, op)
@@ -52,23 +54,42 @@ def build_infer_report(
             daily_capacity += uph * qty * hours_day
 
         pk_op = (pk, op)
+        produced_qty = float(sim_result.produced_by_pko.get(pk_op, 0.0))
+        horizon_capacity = daily_capacity * capa_scale
+        utilization_rate = (
+            min(1.0, produced_qty / horizon_capacity)
+            if horizon_capacity > 0
+            else 0.0
+        )
         targets.append({
             "batch_id": batch_id,
             "plan_prod_key": pk,
             "oper_id": op,
             "plan_qty": float(plan_qty),
-            "produced_qty": float(sim_result.produced_by_pko.get(pk_op, 0.0)),
+            "produced_qty": produced_qty,
             "achievement_rate": float(sim_result.achievement_by_pko.get(pk_op, 0.0)),
+            "utilization_rate": utilization_rate,
             "eqp_qty_by_model": eqp_by_model,
             "daily_capacity": daily_capacity,
+            "horizon_capacity": horizon_capacity,
         })
         total_daily_capacity += daily_capacity
+        total_produced += produced_qty
+
+    total_horizon_capacity = total_daily_capacity * capa_scale
+    avg_utilization = (
+        min(1.0, total_produced / total_horizon_capacity)
+        if total_horizon_capacity > 0
+        else 0.0
+    )
 
     return {
         "horizon_hours": horizon,
         "hours_per_day": hours_day,
         "avg_achievement": float(sim_result.avg_achievement),
+        "avg_utilization": avg_utilization,
         "total_daily_capacity": total_daily_capacity,
+        "total_horizon_capacity": total_horizon_capacity,
         "targets": targets,
     }
 
@@ -78,8 +99,9 @@ def format_infer_report_log(report: Dict[str, Any]) -> str:
     lines = [
         "--- infer report ---",
         f"avg_achievement: {report['avg_achievement']:.4f}",
+        f"avg_utilization: {report.get('avg_utilization', 0.0):.4f}",
         f"total_daily_capacity: {report['total_daily_capacity']:.1f}",
-        "batch_id | plan_prod_key | oper_id | achv | eqp_by_model | daily_capa",
+        "batch_id | plan_prod_key | oper_id | achv | util | eqp_by_model | daily_capa",
     ]
     for t in report.get("targets", []):
         models = ", ".join(
@@ -87,7 +109,8 @@ def format_infer_report_log(report: Dict[str, Any]) -> str:
         ) or "-"
         lines.append(
             f"{t.get('batch_id', '')} | {t['plan_prod_key']} | {t['oper_id']} | "
-            f"{t['achievement_rate']:.4f} | [{models}] | {t['daily_capacity']:.1f}"
+            f"{t['achievement_rate']:.4f} | {t.get('utilization_rate', 0.0):.4f} | "
+            f"[{models}] | {t['daily_capacity']:.1f}"
         )
     return "\n".join(lines)
 
@@ -136,7 +159,9 @@ def render_infer_report_html(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     avg = float(report.get("avg_achievement", 0.0))
+    avg_util = float(report.get("avg_utilization", 0.0))
     total_capa = float(report.get("total_daily_capacity", 0.0))
+    total_horizon_capa = float(report.get("total_horizon_capacity", 0.0))
     horizon = float(report.get("horizon_hours", 1.0))
     hours_day = float(report.get("hours_per_day", 24.0))
 
@@ -146,7 +171,9 @@ def render_infer_report_html(
             f"{_esc(m)}:{q}" for m, q in sorted(t.get("eqp_qty_by_model", {}).items())
         ) or "-"
         achv = float(t.get("achievement_rate", 0.0))
+        util = float(t.get("utilization_rate", 0.0))
         achv_cls = "kpi-good" if achv >= 0.99 else ("kpi-warn" if achv >= 0.5 else "kpi-bad")
+        util_cls = "kpi-good" if util >= 0.99 else ("kpi-warn" if util >= 0.5 else "kpi-bad")
         target_rows.append(
             "<tr>"
             f"<td>{_esc(t.get('batch_id', ''))}</td>"
@@ -155,6 +182,7 @@ def render_infer_report_html(
             f"<td class='num'>{t.get('plan_qty', 0):.1f}</td>"
             f"<td class='num'>{t.get('produced_qty', 0):.1f}</td>"
             f"<td class='num {achv_cls}'>{_pct(achv)}</td>"
+            f"<td class='num {util_cls}'>{_pct(util)}</td>"
             f"<td>{models}</td>"
             f"<td class='num'>{t.get('daily_capacity', 0):.1f}</td>"
             "</tr>"
@@ -196,7 +224,9 @@ Source: {_esc(source)}</p>
 
 <div class="kpi-grid">
   <div class="kpi"><label>평균 달성률</label><div class="value">{_pct(avg)}</div></div>
+  <div class="kpi"><label>평균 가동률</label><div class="value">{_pct(avg_util)}</div></div>
   <div class="kpi"><label>합산 일 Capa</label><div class="value">{total_capa:,.0f}</div></div>
+  <div class="kpi"><label>합산 horizon Capa</label><div class="value">{total_horizon_capa:,.0f}</div></div>
   <div class="kpi"><label>전환 출력 행</label><div class="value">{rows}</div></div>
   <div class="kpi"><label>할당 건수</label><div class="value">{allocation_count}</div></div>
   <div class="kpi"><label>시뮬 horizon (h)</label><div class="value">{horizon:g}</div></div>
@@ -210,9 +240,9 @@ Source: {_esc(source)}</p>
 <table>
 <thead><tr>
 <th>batch_id</th><th>plan_prod_key</th><th>oper_id</th>
-<th>plan_qty</th><th>produced</th><th>달성률</th><th>eqp (model:qty)</th><th>일 capa</th>
+<th>plan_qty</th><th>produced</th><th>달성률</th><th>가동률</th><th>eqp (model:qty)</th><th>일 capa</th>
 </tr></thead>
-<tbody>{''.join(target_rows) or '<tr><td colspan="8">No plan targets</td></tr>'}</tbody>
+<tbody>{''.join(target_rows) or '<tr><td colspan="9">No plan targets</td></tr>'}</tbody>
 </table>
 </body></html>
 """
