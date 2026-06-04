@@ -210,6 +210,7 @@ skip-worktree가 켜진 동안에는 pull/merge가 로컬 `settings.json`을 건
     "password":      "<회사 비밀번호>",
     "dsn":           "<호스트>:<포트>/<서비스명>",
     "query_dir":     "config/queries",
+    "query_mode":    "split",
     "fac_id":        "CJPRB",
     "write_history": true
   },
