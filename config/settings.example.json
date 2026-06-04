@@ -4,6 +4,7 @@
     "password": "dispatcher",
     "dsn": "localhost:1521/XEPDB1",
     "query_dir": "config/queries",
+    "query_mode": "split",
     "fac_id": "CJPRB",
     "write_history": true
   },

@@ -174,6 +174,17 @@ _QUERY_FILES = {
     "latest_key": "latest_key.sql",
 }
 
+# Split mode: one SQL per logical input (edit independently; column order fixed).
+_SPLIT_QUERY_FILES = {
+    "wip":       "wip.sql",
+    "uph":       "uph.sql",
+    "equipment": "equipment.sql",
+    "plan":      "plan.sql",
+    "tool_qty":  "tool_qty.sql",
+}
+
+_QUERY_MODES = ("pivot", "split")
+
 _DEFAULT_FAC_ID = "CJPRB"
 
 
@@ -197,20 +208,44 @@ def oracle_query_params(
     return params
 
 
-def load_sql(query_dir: Optional[str], kind: str) -> str:
-    """Read a query file from `query_dir` (kind ∈ {source, range_keys, latest_key}).
+def resolve_query_mode(settings: Optional[dict] = None) -> str:
+    """Oracle 입력 로드 방식: pivot (source.sql) | split (항목별 SQL)."""
+    if not settings:
+        return "pivot"
+    mode = str(settings.get("oracle", {}).get("query_mode", "pivot")).lower()
+    if mode not in _QUERY_MODES:
+        raise ValueError(f"oracle.query_mode must be one of {_QUERY_MODES}, got {mode!r}")
+    return mode
 
-    Raises FileNotFoundError if the directory or the kind file is missing —
-    the operator must provide the SQL; there is no embedded fallback.
+
+def _query_filename(kind: str) -> str:
+    if kind in _QUERY_FILES:
+        return _QUERY_FILES[kind]
+    if kind in _SPLIT_QUERY_FILES:
+        return _SPLIT_QUERY_FILES[kind]
+    raise KeyError(f"Unknown query kind: {kind!r}")
+
+
+def load_sql(query_dir: Optional[str], kind: str) -> str:
+    """Read a query file from `query_dir`.
+
+    Meta kinds: source, range_keys, latest_key.
+    Split kinds: wip, uph, equipment, plan, tool_qty.
+
+    Raises FileNotFoundError if the directory or the kind file is missing.
     """
     if not query_dir:
         raise FileNotFoundError(
             f"oracle.query_dir not set; cannot resolve '{kind}' query."
         )
-    path = Path(query_dir) / _QUERY_FILES[kind]
+    path = Path(query_dir) / _query_filename(kind)
     if not path.exists():
         raise FileNotFoundError(f"Query file not found: {path}")
     return path.read_text(encoding="utf-8")
+
+
+def split_query_kinds() -> Tuple[str, ...]:
+    return tuple(_SPLIT_QUERY_FILES.keys())
 
 
 def list_rule_timekeys(
@@ -296,11 +331,164 @@ def load_problem_from_oracle(
             tool_groups={"G001": ["9C/92", "9C/102"]},
         )
     """
+    groups = tool_groups or {}
+    mode = resolve_query_mode(settings)
+    if mode == "split":
+        return _load_problem_from_oracle_split(
+            conn, query_dir, rule_timekey, groups, settings, fac_id=fac_id,
+        )
     from core.db import fetch_all
     sql = load_sql(query_dir, "source")
     params = oracle_query_params(settings, fac_id=fac_id, rule_timekey=rule_timekey)
     rows = fetch_all(conn, sql, params)
-    return _rows_to_problem(rule_timekey, rows, tool_groups or {})
+    return _rows_to_problem(rule_timekey, rows, groups)
+
+
+def _fetch_split(conn, query_dir: str, kind: str, params: Dict[str, Any]) -> List[Tuple]:
+    from core.db import fetch_all
+    sql = load_sql(query_dir, kind)
+    return fetch_all(conn, sql, params)
+
+
+def _map_wip_rows(rule_timekey: str, rows: Iterable[Tuple]) -> Tuple[List[WipRecord], Dict[Tuple[str, str], str]]:
+    wip: List[WipRecord] = []
+    seen_pko_batch: Dict[Tuple[str, str], str] = {}
+    for row in rows:
+        rk, batch_id, plan_prod_key, oper_id, oper_seq, wip_qty = row
+        wip.append(WipRecord(
+            rule_timekey=rk or rule_timekey,
+            plan_prod_key=plan_prod_key,
+            oper_id=oper_id,
+            oper_seq=int(oper_seq or 0),
+            wip_qty=float(wip_qty or 0.0),
+        ))
+        seen_pko_batch[(plan_prod_key, oper_id)] = batch_id
+    return wip, seen_pko_batch
+
+
+def _map_uph_rows(rule_timekey: str, rows: Iterable[Tuple]) -> List[UphRecord]:
+    return [
+        UphRecord(
+            rule_timekey=rk or rule_timekey,
+            plan_prod_key=plan_prod_key,
+            oper_id=oper_id,
+            eqp_model_cd=eqp_model_cd,
+            uph=float(uph or 0.0),
+        )
+        for rk, plan_prod_key, oper_id, eqp_model_cd, uph in rows
+    ]
+
+
+def _map_equipment_rows(
+    rule_timekey: str, rows: Iterable[Tuple],
+) -> Dict[Tuple[str, str], int]:
+    equipment_map: Dict[Tuple[str, str], int] = {}
+    for rk, batch_id, eqp_model_cd, eqp_qty in rows:
+        key = (batch_id, eqp_model_cd)
+        equipment_map[key] = equipment_map.get(key, 0) + int(float(eqp_qty or 0))
+    return equipment_map
+
+
+def _map_plan_rows(
+    rule_timekey: str, rows: Iterable[Tuple],
+) -> Dict[Tuple[str, str], float]:
+    plan_map: Dict[Tuple[str, str], float] = {}
+    for rk, plan_prod_key, oper_id, _start, _end, plan_qty in rows:
+        key = (plan_prod_key, oper_id)
+        plan_map[key] = plan_map.get(key, 0.0) + float(plan_qty or 0.0)
+    return plan_map
+
+
+def _map_tool_qty_rows(rule_timekey: str, rows: Iterable[Tuple]) -> List[ToolQtyRecord]:
+    return [
+        ToolQtyRecord(
+            rule_timekey=rk or rule_timekey,
+            batch_id=batch_id,
+            eqp_model_cd=eqp_model_cd,
+            tool_qty=int(float(tool_qty or 0)),
+        )
+        for rk, batch_id, eqp_model_cd, tool_qty in rows
+    ]
+
+
+def _load_problem_from_oracle_split(
+    conn,
+    query_dir: Optional[str],
+    rule_timekey: str,
+    tool_groups: Dict[str, List[str]],
+    settings: Optional[dict],
+    *,
+    fac_id: Optional[str] = None,
+) -> SchedulingProblem:
+    """항목별 SQL(wip/uph/equipment/plan/tool_qty) 실행 후 SchedulingProblem 조립."""
+    if not query_dir:
+        raise FileNotFoundError("oracle.query_dir not set for split query mode.")
+    params = oracle_query_params(
+        settings, fac_id=fac_id, rule_timekey=rule_timekey,
+    )
+    wip, seen_pko_batch = _map_wip_rows(
+        rule_timekey, _fetch_split(conn, query_dir, "wip", params),
+    )
+    uph = _map_uph_rows(
+        rule_timekey, _fetch_split(conn, query_dir, "uph", params),
+    )
+    equipment_map = _map_equipment_rows(
+        rule_timekey, _fetch_split(conn, query_dir, "equipment", params),
+    )
+    plan_map = _map_plan_rows(
+        rule_timekey, _fetch_split(conn, query_dir, "plan", params),
+    )
+    tool_qty = _map_tool_qty_rows(
+        rule_timekey, _fetch_split(conn, query_dir, "tool_qty", params),
+    )
+    return _assemble_scheduling_problem(
+        rule_timekey, wip, uph, equipment_map, plan_map,
+        tool_qty, seen_pko_batch, tool_groups,
+    )
+
+
+def _assemble_scheduling_problem(
+    rule_timekey: str,
+    wip: List[WipRecord],
+    uph: List[UphRecord],
+    equipment_map: Dict[Tuple[str, str], int],
+    plan_map: Dict[Tuple[str, str], float],
+    tool_qty: List[ToolQtyRecord],
+    seen_pko_batch: Dict[Tuple[str, str], str],
+    tool_groups: Dict[str, List[str]],
+) -> SchedulingProblem:
+    tool_groups_recs = [
+        ToolGroupRecord(
+            rule_timekey=rule_timekey, batch_id=batch_id,
+            plan_prod_key=pk, oper_id=op,
+        )
+        for (pk, op), batch_id in seen_pko_batch.items()
+    ]
+    equipment = [
+        EquipmentRecord(rule_timekey=rule_timekey, batch_id=b, eqp_model_cd=m, eqp_qty=q)
+        for (b, m), q in equipment_map.items()
+    ]
+    plans = [
+        PlanRecord(rule_timekey=rule_timekey, plan_prod_key=pk, oper_id=op,
+                   start_time=rule_timekey, end_time=rule_timekey, plan_qty=qty)
+        for (pk, op), qty in plan_map.items()
+    ]
+    availability = [
+        AvailabilityRecord(rule_timekey=rule_timekey, plan_prod_key=u.plan_prod_key,
+                           oper_id=u.oper_id, eqp_model_cd=u.eqp_model_cd, avail_yn=u.uph > 0.0)
+        for u in uph
+    ]
+    return SchedulingProblem(
+        rule_timekey=rule_timekey,
+        wip=wip,
+        uph=uph,
+        equipment=equipment,
+        availability=availability,
+        tool_groups=tool_groups_recs,
+        tool_qty=tool_qty,
+        plans=plans,
+        eqp_model_groups=tool_groups,
+    )
 
 
 def _rows_to_problem(
@@ -313,7 +501,6 @@ def _rows_to_problem(
     equipment_map: Dict[Tuple[str, str], int] = {}
     plan_map: Dict[Tuple[str, str], float] = {}
     tool_qty: List[ToolQtyRecord] = []
-    tool_groups_recs: List[ToolGroupRecord] = []
     seen_pko_batch: Dict[Tuple[str, str], str] = {}
 
     for row in rows:
@@ -343,34 +530,7 @@ def _rows_to_problem(
                 tool_qty=int(float(attr_val or 0)),
             ))
 
-    for (pk, op), batch_id in seen_pko_batch.items():
-        tool_groups_recs.append(ToolGroupRecord(
-            rule_timekey=rule_timekey, batch_id=batch_id,
-            plan_prod_key=pk, oper_id=op,
-        ))
-
-    equipment = [
-        EquipmentRecord(rule_timekey=rule_timekey, batch_id=b, eqp_model_cd=m, eqp_qty=q)
-        for (b, m), q in equipment_map.items()
-    ]
-    plans = [
-        PlanRecord(rule_timekey=rule_timekey, plan_prod_key=pk, oper_id=op,
-                   start_time=rule_timekey, end_time=rule_timekey, plan_qty=qty)
-        for (pk, op), qty in plan_map.items()
-    ]
-    availability = [
-        AvailabilityRecord(rule_timekey=rule_timekey, plan_prod_key=u.plan_prod_key,
-                           oper_id=u.oper_id, eqp_model_cd=u.eqp_model_cd, avail_yn=u.uph > 0.0)
-        for u in uph
-    ]
-    return SchedulingProblem(
-        rule_timekey=rule_timekey,
-        wip=wip,
-        uph=uph,
-        equipment=equipment,
-        availability=availability,
-        tool_groups=tool_groups_recs,
-        tool_qty=tool_qty,
-        plans=plans,
-        eqp_model_groups=tool_groups,
+    return _assemble_scheduling_problem(
+        rule_timekey, wip, uph, equipment_map, plan_map,
+        tool_qty, seen_pko_batch, tool_groups,
     )
