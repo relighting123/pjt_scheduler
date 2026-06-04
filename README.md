@@ -137,11 +137,8 @@ python run.py infer --dump-snapshot
 `config/settings.json` → `oracle.fac_id` (기본 `CJPRB`) 또는 `--fac-id ICPRB`로
 공장 필터를 바꿀 수 있다.
 
-Oracle 입력은 `oracle.query_mode`로 선택한다:
-
-- **`split`** (권장): `config/queries/wip.sql`, `uph.sql`, `equipment.sql`,
-  `plan.sql`, `tool_qty.sql` — 항목별 SQL 수정 후 Python이 record로 매핑
-- **`pivot`**: `source.sql` 1개로 조회 후 `GBN_CD` 피벗 (기존)
+Oracle 입력은 항목별 SQL (`config/queries/wip.sql`, `uph.sql`, `equipment.sql`,
+`plan.sql`, `tool_qty.sql`) — 파일마다 SQL을 수정하고 컬럼 순서만 유지.
 
 infer 결과 JSON에는 `input_summary`, `infer_report`, `report_html`(KPI HTML),
 `allocation_count`, `rows`가 포함된다. stderr에 표 로그 + HTML 경로가 출력된다.
