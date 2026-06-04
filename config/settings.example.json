@@ -43,7 +43,13 @@
     "horizon_hours": 1.0,
     "hours_per_day": 24.0,
     "write_report_html": true,
+    "write_gantt_html": true,
     "report_dir": "artifacts/reports"
+  },
+  "virtual_eqp": {
+    "gantt_slots": 24,
+    "slot_hours": 1.0,
+    "unit_rules": {}
   },
   "benchmark": {
     "dataset_root": "benchmarks",

@@ -34,6 +34,7 @@ from .data_loader import (
     load_problem_from_oracle,
     resolve_fac_id,
 )
+from .gantt_report import build_and_render_gantt, resolve_gantt_path
 from .infer_report import (
     build_infer_report,
     format_infer_report_log,
@@ -100,10 +101,11 @@ def _finish_infer_result(
             mode,
             report_html_path,
         )
+        rk = result.get("rule_timekey", problem.rule_timekey)
         result["report_html"] = render_infer_report_html(
             report,
             html_path,
-            rule_timekey=result.get("rule_timekey", problem.rule_timekey),
+            rule_timekey=rk,
             mode=mode,
             fac_id=result.get("fac_id", ""),
             source=result.get("source", "oracle"),
@@ -111,6 +113,19 @@ def _finish_infer_result(
             allocation_count=int(result.get("allocation_count", 0)),
             input_summary=result.get("input_summary"),
         )
+    if infer_cfg.get("write_gantt_html", True):
+        gantt_meta = build_and_render_gantt(
+            problem,
+            allocation,
+            settings,
+            resolve_gantt_path(settings, result.get("rule_timekey", problem.rule_timekey), mode),
+            rule_timekey=result.get("rule_timekey", problem.rule_timekey),
+            mode=mode,
+            fac_id=result.get("fac_id", ""),
+        )
+        result["gantt_html"] = gantt_meta["gantt_html"]
+        result["virtual_eqp_count"] = gantt_meta["virtual_eqp_count"]
+        result["virtual_eqp_blocked"] = gantt_meta["blocked_count"]
     return result
 
 
