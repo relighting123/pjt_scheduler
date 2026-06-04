@@ -19,7 +19,7 @@ from core.domain import (  # noqa: E402
     AvailabilityRecord, EquipmentRecord, PlanRecord, SchedulingProblem,
     ToolGroupRecord, ToolQtyRecord, UphRecord, WipRecord,
 )
-from core.sim.flow import (  # noqa: E402
+from core.sim.multiperiod import (  # noqa: E402
     MultiPeriodSimulator, dynamic_greedy_policy, multiperiod_optimal, static_policy,
 )
 

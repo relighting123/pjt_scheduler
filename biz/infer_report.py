@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.domain import AllocationSet, SchedulingProblem
-from core.sim.simulator import Simulator
+from core.sim.snapshot import Simulator
 
 
 def _infer_horizon_hours(settings: dict, mode: str) -> float:

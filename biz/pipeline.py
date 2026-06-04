@@ -254,7 +254,7 @@ def run_train(
     imit_loss_target = float(speed_cfg.get("imitation_loss_target", 0.05))
 
     if mode == "dynamic":
-        from core.rl.train_mp import train_multiperiod
+        from core.rl.train_multiperiod import train_multiperiod
         dyn = settings.get("dynamic", {})
         train_multiperiod(
             problems=problems,
@@ -466,7 +466,7 @@ def _infer_one(problem: SchedulingProblem, model_path: Optional[str], mode: str,
 
 def _infer_dynamic_first_slot(problem, model_path, settings) -> AllocationSet:
     """Roll the dynamic policy for one slot and return that allocation."""
-    from core.sim.flow import MultiPeriodSimulator, dynamic_greedy_policy
+    from core.sim.multiperiod import MultiPeriodSimulator, dynamic_greedy_policy
     dyn = settings.get("dynamic", {})
     num_slots = int(dyn.get("num_slots", 4))
     slot_hours = float(dyn.get("slot_hours", 1.0))
@@ -476,7 +476,7 @@ def _infer_dynamic_first_slot(problem, model_path, settings) -> AllocationSet:
     if model_path and Path(model_path).exists():
         try:
             from sb3_contrib import MaskablePPO
-            from core.rl.env_mp import MultiPeriodDispatchEnv
+            from core.rl.env_multiperiod import MultiPeriodDispatchEnv
             import torch
             torch.distributions.Distribution.set_default_validate_args(False)
             model = MaskablePPO.load(model_path)

@@ -195,7 +195,7 @@ def _dynamic_schedule(
     problem: SchedulingProblem,
     settings: dict,
 ) -> List[AllocationSet]:
-    from core.sim.flow import MultiPeriodSimulator, dynamic_greedy_policy
+    from core.sim.multiperiod import MultiPeriodSimulator, dynamic_greedy_policy
 
     dyn = settings.get("dynamic", {})
     infer = settings.get("infer", {})
