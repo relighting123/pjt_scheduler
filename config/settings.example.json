@@ -48,8 +48,7 @@
   },
   "virtual_eqp": {
     "gantt_slots": 24,
-    "slot_hours": 1.0,
-    "unit_rules": {}
+    "slot_hours": 1.0
   },
   "benchmark": {
     "dataset_root": "benchmarks",

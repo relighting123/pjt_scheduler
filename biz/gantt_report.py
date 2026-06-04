@@ -2,16 +2,14 @@
 from __future__ import annotations
 
 import html
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from core.domain import AllocationSet, SchedulingProblem
 
 from .virtual_eqp import (
-    GanttSegment,
-    assign_virtual_units,
     build_gantt_segments,
+    expand_allocation_to_virtual,
     gantt_config,
 )
 
@@ -29,7 +27,7 @@ def _color_for_pk(pk: str) -> str:
 
 
 def render_gantt_html(
-    segments: List[GanttSegment],
+    segments: List,
     output_path: str | Path,
     *,
     rule_timekey: str,
@@ -37,7 +35,6 @@ def render_gantt_html(
     slot_hours: float,
     fac_id: str = "",
     mode: str = "",
-    constraint_notes: Optional[List[str]] = None,
 ) -> str:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,33 +48,21 @@ def render_gantt_html(
     rows_html = []
     for rid in row_ids:
         segs = [s for s in segments if s.virtual_eqp_id == rid]
-        label = rid
-        if segs:
-            s0 = segs[0]
-            label = f"{rid}<br><small>{_esc(s0.eqp_model_cd)} / {_esc(s0.batch_id)}</small>"
-        cells = ["<td class='eqp-label'>" + label + "</td>"]
-        occupied = [None] * num_slots
-        for s in segs:
-            for t in range(max(0, s.slot_start), min(num_slots, s.slot_end)):
-                occupied[t] = s
+        s0 = segs[0]
+        label = f"{rid}<br><small>{_esc(s0.eqp_model_cd)} / {_esc(s0.batch_id)}</small>"
+        cells = [f"<td class='eqp-label'>{label}</td>"]
         for t in range(num_slots):
-            s = occupied[t]
+            s = segs[0] if segs else None
             if s is None or not s.plan_prod_key:
                 cells.append("<td class='slot empty'></td>")
                 continue
             title = f"{s.plan_prod_key} / {s.oper_id}"
-            if not s.allowed:
-                title += f" [BLOCKED: {s.block_reason}]"
-            bg = _color_for_pk(s.plan_prod_key) if s.allowed else "#ccc"
-            border = "" if s.allowed else "border:2px dashed #c33;"
+            bg = _color_for_pk(s.plan_prod_key)
             cells.append(
                 f"<td class='slot' title='{_esc(title)}'>"
-                f"<div class='bar' style='background:{bg};{border}'></div></td>"
+                f"<div class='bar' style='background:{bg}'></div></td>"
             )
         rows_html.append("<tr>" + "".join(cells) + "</tr>")
-
-    notes = constraint_notes or []
-    notes_html = "".join(f"<li>{_esc(n)}</li>" for n in notes) or "<li>가상 호기 = 모델×배치×순번. 호기별 제한은 settings.virtual_eqp.unit_rules</li>"
 
     body = f"""<!doctype html>
 <html lang="ko"><head><meta charset="utf-8">
@@ -93,23 +78,19 @@ table.gantt{{border-collapse:collapse;min-width:900px}}
 .slot{{width:28px;height:28px;padding:0;vertical-align:middle}}
 .slot .bar{{height:22px;margin:2px;border-radius:2px}}
 .slot.empty{{background:#fafafa}}
-.slot-h{{writing-mode:horizontal-tb;min-width:28px}}
-.legend{{margin:1rem 0;font-size:.85rem}}
-h2{{margin-top:1.5rem;font-size:1.1rem}}
+.slot-h{{min-width:28px}}
 </style></head><body>
 <h1>가상 호기 간트 (24h)</h1>
 <p class="meta">RULE_TIMEKEY: <strong>{_esc(rule_timekey)}</strong> |
 FAC_ID: {_esc(fac_id)} | mode: {_esc(mode)} |
 슬롯: {num_slots} × {slot_hours:g}h</p>
+<p class="meta">가상호기 ID = V-모델@배치#순번 (eqp_qty 확장)</p>
 <div class="gantt-wrap">
 <table class="gantt">
 <thead><tr><th>가상호기</th>{slot_headers}</tr></thead>
-<tbody>{''.join(rows_html)}</tbody>
+<tbody>{''.join(rows_html) or '<tr><td colspan="25">No allocation</td></tr>'}</tbody>
 </table>
 </div>
-<h2>호기별 제약 / 재공</h2>
-<ul class="legend">{notes_html}</ul>
-<p class="legend">빨간 점선 = 모델·재공·unit_rules 중 하나에 걸려 해당 (제품,공정) 투입 불가로 표시.</p>
 </body></html>
 """
     path.write_text(body, encoding="utf-8")
@@ -126,22 +107,10 @@ def build_and_render_gantt(
     mode: str,
     fac_id: str = "",
 ) -> Dict[str, Any]:
+    del problem  # reserved for future slot-varying schedule
     num_slots, slot_hours = gantt_config(settings)
-    virtual_assignments = assign_virtual_units(problem, allocation, settings)
-    segments = build_gantt_segments(
-        virtual_assignments,
-        num_slots=num_slots,
-        slot_hours=slot_hours,
-        rule_timekey=rule_timekey,
-    )
-    blocked = [va for va in virtual_assignments if not va.allowed]
-    notes = [
-        f"blocked virtual units: {len(blocked)} / {len(virtual_assignments)}",
-    ]
-    for va in blocked[:10]:
-        notes.append(
-            f"{va.virtual_eqp.virtual_eqp_id}: {va.block_reason or 'not allowed'}",
-        )
+    units = expand_allocation_to_virtual(allocation)
+    segments = build_gantt_segments(units, num_slots=num_slots)
     path = render_gantt_html(
         segments, output_path,
         rule_timekey=rule_timekey,
@@ -149,26 +118,12 @@ def build_and_render_gantt(
         slot_hours=slot_hours,
         fac_id=fac_id,
         mode=mode,
-        constraint_notes=notes,
     )
     return {
         "gantt_html": path,
-        "virtual_eqp_count": len(virtual_assignments),
-        "blocked_count": len(blocked),
+        "virtual_eqp_count": len(units),
         "gantt_slots": num_slots,
         "slot_hours": slot_hours,
-        "segments": [
-            {
-                "virtual_eqp_id": s.virtual_eqp_id,
-                "plan_prod_key": s.plan_prod_key,
-                "oper_id": s.oper_id,
-                "slot_start": s.slot_start,
-                "slot_end": s.slot_end,
-                "allowed": s.allowed,
-                "block_reason": s.block_reason,
-            }
-            for s in segments
-        ],
     }
 
 

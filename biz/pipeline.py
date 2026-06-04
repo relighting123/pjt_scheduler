@@ -125,7 +125,6 @@ def _finish_infer_result(
         )
         result["gantt_html"] = gantt_meta["gantt_html"]
         result["virtual_eqp_count"] = gantt_meta["virtual_eqp_count"]
-        result["virtual_eqp_blocked"] = gantt_meta["blocked_count"]
     return result
 
 
