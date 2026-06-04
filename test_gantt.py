@@ -25,7 +25,9 @@ def test_virtual_expand_and_gantt():
         rule_timekey="benchmark_01", mode="wip-static",
     )
     assert Path(meta["gantt_html"]).exists()
-    assert "가상 호기 간트" in Path(meta["gantt_html"]).read_text(encoding="utf-8")
+    html = Path(meta["gantt_html"]).read_text(encoding="utf-8")
+    assert "호기 스케줄" in html
+    assert "SEQ_NO" in html
 
 
 def test_infer_includes_gantt_path():
