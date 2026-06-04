@@ -34,8 +34,40 @@ from .data_loader import (
     load_problem_from_oracle,
 )
 from .output_writer import build_conversion_rows, write_csv, write_oracle
+from .problem_snapshot import (
+    dump_infer_snapshot,
+    load_infer_snapshot,
+    problem_input_summary,
+    resolve_snapshot_path,
+)
 
 MODES = ("plan-only", "wip-static", "dynamic")
+
+
+def _apply_infer_snapshot(
+    settings: dict,
+    problem: SchedulingProblem,
+    *,
+    mode: str,
+    source: str,
+    dump_snapshot: bool = False,
+    snapshot_path: Optional[str] = None,
+) -> tuple[SchedulingProblem, Optional[str], dict]:
+    """옵션 켜면 problem을 JSON으로 저장 후 다시 읽어 infer 입력으로 사용."""
+    infer_cfg = settings.get("infer", {})
+    enabled = dump_snapshot or bool(infer_cfg.get("dump_snapshot_json", False))
+    summary = problem_input_summary(problem)
+    if not enabled:
+        return problem, None, summary
+
+    path = resolve_snapshot_path(
+        settings, problem.rule_timekey, mode, snapshot_path,
+    )
+    dump_infer_snapshot(path, problem, mode=mode, source=source)
+    if infer_cfg.get("use_snapshot_on_read", True):
+        problem, _meta = load_infer_snapshot(path)
+        summary = problem_input_summary(problem)
+    return problem, str(path), summary
 
 
 def load_settings(path: str | Path) -> dict:
@@ -230,6 +262,8 @@ def run_infer(
     benchmark_dataset: Optional[str] = None,
     output_csv: Optional[str] = None,
     mode: Optional[str] = None,
+    dump_snapshot: bool = False,
+    snapshot_path: Optional[str] = None,
 ) -> dict:
     """선택한 모드의 추론. 벤치마크면 CSV 출력, DB면 RTD_CONV_INF/HIS 기록.
 
@@ -239,9 +273,12 @@ def run_infer(
         benchmark_dataset: 벤치마크 폴더 (DB 대신).
         output_csv: 벤치마크 추론 출력 CSV 경로.
         mode: plan-only | wip-static | dynamic.
+        dump_snapshot: True면 입력을 JSON 파일로 저장 후 재로드 (로그용).
+        snapshot_path: 스냅샷 JSON 경로 (미지정 시 infer.snapshot_dir 사용).
 
     Returns:
-        {"mode", "source": "benchmark"|"oracle", "rule_timekey", "rows", "output"?}
+        {"mode", "source", "rule_timekey", "rows", "input_summary",
+         "allocation_count", "snapshot"? , "output"?}
 
     Example:
         result = run_infer(load_settings("config/settings.json"),
@@ -256,13 +293,27 @@ def run_infer(
 
     if benchmark_dataset:
         problem = load_problem_from_csv_dir(benchmark_dataset)
+        problem, snap_path, input_summary = _apply_infer_snapshot(
+            settings, problem, mode=mode, source="benchmark",
+            dump_snapshot=dump_snapshot, snapshot_path=snapshot_path,
+        )
         allocation = _infer_one(problem, model_path, mode, settings)
         rows = build_conversion_rows(problem.rule_timekey, None, allocation)
         if not output_csv:
             output_csv = str(Path("artifacts/inference") / f"{problem.rule_timekey}_{mode}.csv")
         write_csv(output_csv, rows)
-        return {"mode": mode, "source": "benchmark",
-                "rule_timekey": problem.rule_timekey, "rows": len(rows), "output": output_csv}
+        result = {
+            "mode": mode,
+            "source": "benchmark",
+            "rule_timekey": problem.rule_timekey,
+            "rows": len(rows),
+            "input_summary": input_summary,
+            "allocation_count": len(allocation.allocations),
+            "output": output_csv,
+        }
+        if snap_path:
+            result["snapshot"] = snap_path
+        return result
 
     conn = _connect(settings)
     try:
@@ -274,6 +325,10 @@ def run_infer(
         problem = load_problem_from_oracle(
             conn, query_dir, rk, settings.get("tool_groups", {}),
         )
+        problem, snap_path, input_summary = _apply_infer_snapshot(
+            settings, problem, mode=mode, source="oracle",
+            dump_snapshot=dump_snapshot, snapshot_path=snapshot_path,
+        )
         allocation = _infer_one(problem, model_path, mode, settings)
         rows = build_conversion_rows(rk, None, allocation)
         write_oracle(
@@ -283,7 +338,17 @@ def run_infer(
             rows=rows,
             write_history=bool(oracle.get("write_history", True)),
         )
-        return {"mode": mode, "source": "oracle", "rule_timekey": rk, "rows": len(rows)}
+        result = {
+            "mode": mode,
+            "source": "oracle",
+            "rule_timekey": rk,
+            "rows": len(rows),
+            "input_summary": input_summary,
+            "allocation_count": len(allocation.allocations),
+        }
+        if snap_path:
+            result["snapshot"] = snap_path
+        return result
     finally:
         conn.close()
 

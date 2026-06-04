@@ -10,5 +10,6 @@ config/settings.json
 artifacts/models/*.zip
 artifacts/models/*.pkl
 artifacts/inference/*.csv
+artifacts/inference/snapshots/*.json
 artifacts/reports/*.html
 !artifacts/.gitkeep
