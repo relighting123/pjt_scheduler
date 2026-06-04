@@ -51,7 +51,7 @@ def _load_output_sql(query_dir: Optional[str], kind: str) -> str:
     path = Path(query_dir) / _OUTPUT_QUERY_FILES[kind]
     if not path.exists():
         raise FileNotFoundError(f"Query file not found: {path}")
-    return path.read_text()
+    return path.read_text(encoding="utf-8")
 
 
 def build_conversion_rows(

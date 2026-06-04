@@ -151,7 +151,7 @@ def load_problem_from_csv_dir(directory: Path | str) -> SchedulingProblem:
 
 def _load_groups_from_meta(path: Path) -> Dict[str, List[str]]:
     if path.exists():
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
@@ -188,7 +188,7 @@ def load_sql(query_dir: Optional[str], kind: str) -> str:
     path = Path(query_dir) / _QUERY_FILES[kind]
     if not path.exists():
         raise FileNotFoundError(f"Query file not found: {path}")
-    return path.read_text()
+    return path.read_text(encoding="utf-8")
 
 
 def list_rule_timekeys(

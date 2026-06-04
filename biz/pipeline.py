@@ -39,7 +39,7 @@ MODES = ("plan-only", "wip-static", "dynamic")
 
 
 def load_settings(path: str | Path) -> dict:
-    return json.loads(Path(path).read_text())
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def resolve_mode(settings: dict, override: Optional[str]) -> str:
