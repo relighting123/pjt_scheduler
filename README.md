@@ -107,11 +107,11 @@ PLAN_PROD_KEY : ["M15/59C/H5UDGSTED/E1S/NA"]
 OPER_ID : ["Z1020000A","Z1040000A"]
 OPER_SEQ : 1,2,3..
 EQP_MODEL_CD : ["T5833","MAGNUM5"]
-GBN_CD : ["ASSIGN_EQUIP_CNT","UPH","WIP_QTY","D0_TARGET_QTY","D1_TARGET_QTY","TOOL_QTY"]
+GBN_CD : ["ASSIGN_EQUIP_CNT","EQUIP_UPH","AVAIL_WIP_QTY","D0_PLAN","D1_PLAN","TOOL_QTY"]
 ATTR_VAL : 각 항목별 GBN_CD에 해당하는 값
 
-**만약 PLAN_PROD_KEY/EQP_MODEL 기준 조회시 UPH가 없다면 진행 불가로 판단함.
-**D0_TARGET의 경우 RULE_TIMEKEY 기준에서 다음날 07시까지의 계획이며 D1 TARGET의 경우 다음날 07시에서 그 다음날 07시까지 계획으로 치환하여 처리
+**만약 PLAN_PROD_KEY/EQP_MODEL 기준 조회시 EQUIP_UPH가 없다면 진행 불가로 판단함.
+**D0_PLAN의 경우 RULE_TIMEKEY 기준에서 다음날 07시까지의 계획이며 D1_PLAN의 경우 다음날 07시에서 그 다음날 07시까지 계획으로 치환하여 처리
 
 **API parameters (rl_train)**
 - `from_rule_timekey`, `to_rule_timekey`, `rule_timekey`, `run_test_eval`, `benchmark_dataset`
@@ -213,7 +213,7 @@ pip install -e .[rl,oracle]
 
 ### WIP handling (단일 스냅샷)
 
-각 OPER의 생산량은 `WIP_QTY`를 상한으로 캡된다 — 재공이 부족하면 장비가 남아도
+각 OPER의 생산량은 `AVAIL_WIP_QTY`를 상한으로 캡된다 — 재공이 부족하면 장비가 남아도
 그 이상 생산하지 못한다. 단일 스냅샷 경로에서 WIP=0/미기록은 하위호환을 위해
 "무제한"으로 간주한다 (`benchmark_11`이 OP20 재공 50개 한계를 검증).
 
