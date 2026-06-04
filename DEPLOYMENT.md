@@ -226,20 +226,35 @@ skip-worktree가 켜진 동안에는 pull/merge가 로컬 `settings.json`을 건
 
 ### 3-1. 입출력 SQL — `config/queries/*.sql`
 
-6개의 SQL 파일을 그대로 두거나 회사 환경(테이블/뷰명, 필터, 파티션 힌트
-등)에 맞게 자유롭게 편집. settings에는 SQL이 한 줄도 없음.
+SQL 파일을 회사 환경에 맞게 자유롭게 편집. settings에는 SQL이 없음.
+파일은 **UTF-8**로 저장.
 
-SQL 파일은 **UTF-8**로 저장한다 (Windows 메모장 cp949 저장 시
-`insert_output.sql` 읽기에서 `UnicodeDecodeError` 발생 가능).
-코드는 SQL/JSON을 `encoding="utf-8"`로 읽는다.
+**`oracle.query_mode`**
 
-**입력**:
+| mode | 설명 |
+|---|---|
+| `split` (권장) | `wip.sql` … `tool_qty.sql` 항목별 조회 후 Python 매핑 |
+| `pivot` | `source.sql` 1회 + `GBN_CD` 피벗 |
 
-| 파일 | 역할 | bind | 반환 컬럼 |
-|---|---|---|---|
-| `source.sql`     | RULE_TIMEKEY 1개 스냅샷 피벗 | `:rule_timekey` | 8개 (아래 순서) |
-| `range_keys.sql` | [from_key, to_key] 구간 RULE_TIMEKEY 목록 | `:from_key`, `:to_key` | `RULE_TIMEKEY` 1개 |
-| `latest_key.sql` | MAX(RULE_TIMEKEY) | 없음 | scalar |
+**공통**: `range_keys.sql`, `latest_key.sql` — bind `:fac_id` (+ 구간 bind)
+
+**split 모드** — 컬럼 순서만 유지하면 SQL 본문은 자유:
+
+| 파일 | → | 컬럼 |
+|---|---|---|
+| `wip.sql` | WipRecord | RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ, WIP_QTY |
+| `uph.sql` | UphRecord | RULE_TIMEKEY, PLAN_PROD_KEY, OPER_ID, EQP_MODEL_CD, UPH |
+| `equipment.sql` | EquipmentRecord | RULE_TIMEKEY, BATCH_ID, EQP_MODEL_CD, EQP_QTY |
+| `plan.sql` | PlanRecord | RULE_TIMEKEY, PLAN_PROD_KEY, OPER_ID, START_TIME, END_TIME, PLAN_QTY |
+| `tool_qty.sql` | ToolQtyRecord | RULE_TIMEKEY, BATCH_ID, EQP_MODEL_CD, TOOL_QTY |
+
+**pivot 모드** — `source.sql` 8컬럼:
+
+| 파일 | bind |
+|---|---|
+| `source.sql` | `:rule_timekey`, `:fac_id` |
+| `range_keys.sql` | `:from_key`, `:to_key`, `:fac_id` |
+| `latest_key.sql` | `:fac_id` |
 
 `source.sql`은 반드시 다음 8개 컬럼을 **이 순서**로 반환:
 ```
