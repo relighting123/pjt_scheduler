@@ -1,5 +1,5 @@
 -- Insert a single conversion row into the latest-result table. Executed via
--- executemany — one row per Allocation diff entry. Bind names below match
+-- executemany - one row per Allocation diff entry. Bind names below match
 -- biz/output_writer.OUTPUT_COLUMNS.
 
 INSERT INTO RTD_CONV_INF (

@@ -172,8 +172,36 @@ GRANT SELECT, INSERT ON RTD_CONV_HIS TO <운영계정>;
 
 ## 3. `config/settings.json` 수정
 
+`config/settings.json`은 Git에서 추적하지 않는다 (로컬 전용).
+최초 1회 템플릿을 복사한 뒤 회사 환경에 맞게 편집:
+
+```bash
+cp config/settings.example.json config/settings.json
+```
+
 회사 DB 정보로 `oracle` 섹션만 바꾸면 됨. tool_groups는 라인의 실제 batch
 그룹으로 정의. 입출력 SQL은 settings에 박지 않고 별도 파일로 관리 (§3-1).
+
+### 3-0. `git pull` 시 settings.json 로컬 유지
+
+이 저장소는 `config/settings.json`을 `.gitignore`에 넣어 두었으므로
+`git pull`해도 로컬 파일이 덮어쓰이지 않는다.
+
+이미 예전에 추적되던 clone이라 pull 시 충돌이 나면, 한 번만:
+
+```bash
+git rm --cached config/settings.json
+git pull
+```
+
+`settings.json`을 계속 Git에 올려 두고 싶다면(비권장), 대신 skip-worktree:
+
+```bash
+git update-index --skip-worktree config/settings.json
+# 해제: git update-index --no-skip-worktree config/settings.json
+```
+
+skip-worktree가 켜진 동안에는 pull/merge가 로컬 `settings.json`을 건드리지 않는다.
 
 ```json
 {
@@ -198,6 +226,10 @@ GRANT SELECT, INSERT ON RTD_CONV_HIS TO <운영계정>;
 
 6개의 SQL 파일을 그대로 두거나 회사 환경(테이블/뷰명, 필터, 파티션 힌트
 등)에 맞게 자유롭게 편집. settings에는 SQL이 한 줄도 없음.
+
+SQL 파일은 **UTF-8**로 저장한다 (Windows 메모장 cp949 저장 시
+`insert_output.sql` 읽기에서 `UnicodeDecodeError` 발생 가능).
+코드는 SQL/JSON을 `encoding="utf-8"`로 읽는다.
 
 **입력**:
 

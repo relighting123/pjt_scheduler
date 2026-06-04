@@ -1,4 +1,4 @@
--- Append a conversion row to the history table. No DELETE — history is
+-- Append a conversion row to the history table. No DELETE - history is
 -- accumulated. Bind names match biz/output_writer.OUTPUT_COLUMNS.
 
 INSERT INTO RTD_CONV_HIS (
