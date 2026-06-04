@@ -35,6 +35,11 @@ from .data_loader import (
     resolve_fac_id,
 )
 from .gantt_report import build_and_render_gantt, resolve_gantt_path
+from .schedule_output import (
+    build_schedule_rows,
+    resolve_schedule_path,
+    write_schedule_csv,
+)
 from .infer_report import (
     build_infer_report,
     format_infer_report_log,
@@ -125,6 +130,19 @@ def _finish_infer_result(
         )
         result["gantt_html"] = gantt_meta["gantt_html"]
         result["virtual_eqp_count"] = gantt_meta["virtual_eqp_count"]
+        result["schedule_row_count"] = gantt_meta.get("schedule_row_count", 0)
+    if infer_cfg.get("write_schedule_csv", True):
+        rk = result.get("rule_timekey", problem.rule_timekey)
+        sched_rows = build_schedule_rows(problem, allocation, settings, mode=mode)
+        sched_path = resolve_schedule_path(settings, rk, mode)
+        write_schedule_csv(
+            sched_path,
+            sched_rows,
+            crt_user_id=infer_cfg.get("crt_user_id", "SCHEDULER"),
+            crt_tm=infer_cfg.get("crt_tm"),
+        )
+        result["schedule_csv"] = str(sched_path)
+        result["schedule_row_count"] = len(sched_rows)
     return result
 
 

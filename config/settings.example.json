@@ -44,7 +44,10 @@
     "hours_per_day": 24.0,
     "write_report_html": true,
     "write_gantt_html": true,
-    "report_dir": "artifacts/reports"
+    "write_schedule_csv": true,
+    "crt_user_id": "SCHEDULER",
+    "report_dir": "artifacts/reports",
+    "schedule_dir": "artifacts/reports"
   },
   "virtual_eqp": {
     "gantt_slots": 24,
