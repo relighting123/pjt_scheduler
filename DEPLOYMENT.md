@@ -269,9 +269,6 @@ SELECT RULE_TIMEKEY, BATCH_ID, PLAN_PROD_KEY, OPER_ID, OPER_SEQ,
   FROM MY_SNAPSHOT_VIEW
  WHERE RULE_TIMEKEY = :rule_timekey
    AND FAC_ID = :fac_id;
-```
-
-`fac_id`는 `settings.json`의 `oracle.fac_id` 또는 CLI `--fac-id`로 지정 (기본 `CJPRB`).
 
 -- delete_output.sql
 DELETE FROM MY_RESULT_TABLE WHERE RULE_TIMEKEY = :rule_timekey;
@@ -279,6 +276,8 @@ DELETE FROM MY_RESULT_TABLE WHERE RULE_TIMEKEY = :rule_timekey;
 -- insert_output.sql
 INSERT INTO MY_RESULT_TABLE (...) VALUES (:rule_timekey, :from_batch, ...);
 ```
+
+`fac_id`는 `settings.json`의 `oracle.fac_id` 또는 CLI `--fac-id`로 지정 (기본 `CJPRB`).
 
 **자주 쓰는 옵션**:
 - `oracle.query_dir`을 라인별로 분리 (`config/queries_icprb/`, `config/queries_cjprb/`).
